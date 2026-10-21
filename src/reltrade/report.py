@@ -879,6 +879,7 @@ def write_report(
         "终局报价清算（扣掉腐败），LLM 会专门在最后几年启程去一个终局之后才到的地方，贪心只选终局前能到的"
         "航程。「不计跨终局航程」把这最后一程换成「不出发、留在港口」：本站买进的货按买价退回，带过来的货"
         "按出发站当时的报价卖掉，退回能源和航程工资，改付停靠工资。比较 LLM 和贪心时以这一列为准。"
+        "「平均船时 τ」是第 100 年那一刻的船时，仍在飞的商人按匀速插值。"
     )
     L.append("")
     _behavior(L, conds, summary)
@@ -1004,14 +1005,14 @@ def write_report(
             L.append("")
         L.append("## 终局笔记本（摘录）")
         L.append("")
-        for r, _ in llm_runs[:3]:
+        for r, m in llm_runs[:3]:
             L.append(f"**{r.meta['run_id']}**")
             L.append("")
             for n, f in r.meta["final"].items():
                 note = (f.get("notebook") or "").strip().replace("\n", " ")
                 if note:
                     L.append(
-                        f"- {n}（净值 {f['net_worth']:,.0f}¢，船时 {f['tau']:.1f} 年）："
+                        f"- {n}（净值 {f['net_worth']:,.0f}¢，船时 {m['tau'][n]:.1f} 年）："
                         f"{note[:400]}"
                     )
             L.append("")

@@ -22,6 +22,7 @@ from reltrade.analysis import (
     rebuild_markets,
     run_metrics,
     summarize,
+    tau_at_end,
     write_audit,
 )
 from reltrade.engine import DecisionContext
@@ -298,6 +299,18 @@ def test_crossing_gain_restores_the_stay_in_port_counterfactual(endgame_dir: Pat
     m = run_metrics(run)
     assert m["in_flight_share"] == 1.0
     assert m["net_alt_mean"] == pytest.approx(sum(expected) / len(expected))
+
+
+def test_tau_at_end_interpolates_ships_still_in_flight(endgame_dir: Path) -> None:
+    # 引擎给终局仍在飞的商人记到港时的船时（货按到港状态清算）；双生子比的是 t_end 那一刻
+    (run,) = load_runs(endgame_dir)
+    tau, t_end = tau_at_end(run), run.meta["t_end"]
+    for i, (n, f) in enumerate(run.meta["final"].items()):
+        assert tau[n] < f["tau"]
+        if i % 2 == 0:  # t=0 起以 0.5c 一直飞过终局
+            assert tau[n] == pytest.approx(t_end * math.sqrt(1 - 0.5**2))
+    m = run_metrics(run)
+    assert m["tau"] == tau and m["tau_mean"] == pytest.approx(sum(tau.values()) / len(tau))
 
 
 def test_crossing_gain_is_zero_when_everyone_is_docked(runs_dir: Path) -> None:

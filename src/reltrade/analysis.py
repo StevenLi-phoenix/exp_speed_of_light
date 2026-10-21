@@ -352,6 +352,19 @@ def arrival_surprise(trip: Trip, markets: dict[str, StationMarket]) -> float | N
     return sell_revenue_from_quote(quote, q) / expected
 
 
+def tau_at_end(run: Run) -> dict[str, float]:
+    """终局（银河时 t_end）那一刻每个商人的船时。引擎给仍在飞的商人记的是到港时的船时
+    （货按到港时的状态清算），双生子比较要按匀速插值回 t_end。"""
+    t_end = run.meta["t_end"]
+    out = {}
+    for n, f in run.meta["final"].items():
+        out[n] = f["tau"]
+        if f["in_flight"]:
+            dep = [r for r in run.records if r["merchant"] == n and r["type"] == "depart"][-1]
+            out[n] -= dep["dtau"] * (dep["eta"] - t_end) / dep["dt"]
+    return out
+
+
 def crossing_gain(run: Run, markets: dict[str, StationMarket]) -> dict[str, float]:
     """终局时仍在飞的商人：最后这趟跨过终局的航程比「不出发、留在港口」多出的净值；停靠的商人为 0。
     规则让在途的货按目的地的终局报价清算，LLM 会专门在最后几年启程去一个终局之后才到的地方，
@@ -409,6 +422,7 @@ def _spearman(x: list[float], y: list[float]) -> float | None:
 def run_metrics(run: Run) -> dict[str, Any]:
     final = run.meta["final"]
     nets = [f["net_worth"] for f in final.values()]
+    tau = tau_at_end(run)
     trips = [t for t in run.trips if t.t_arr is not None]
     out: dict[str, Any] = {
         "run_id": run.meta["run_id"],
@@ -423,7 +437,7 @@ def run_metrics(run: Run) -> dict[str, Any]:
         "bankrupt": sum(1 for r in run.records if r["type"] == "bankrupt"),
         "trips": len(run.trips),
         "empty_trips": sum(1 for t in run.trips if t.main == "empty"),
-        "tau_mean": statistics.mean(f["tau"] for f in final.values()),
+        "tau_mean": statistics.mean(tau.values()),
         "waits": sum(1 for r in run.records if r["type"] == "wait"),
         "forced_waits": sum(1 for r in run.records if r["type"] == "wait" and r["forced"]),
     }
@@ -575,7 +589,7 @@ def run_metrics(run: Run) -> dict[str, Any]:
         {"t": m["t"], "from": m["merchant"], "at": m["station"], "to": m["to"], "text": m["text"]}
         for m in msgs
     ]
-    out["tau"] = {n: f["tau"] for n, f in final.items()}
+    out["tau"] = tau
     out["net"] = {n: f["net_worth"] for n, f in final.items()}
     if run.docks:
         tags = [concepts(d.text, d.merchant, final) for d in run.docks]
