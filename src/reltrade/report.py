@@ -386,6 +386,90 @@ def fig_wave(out: Path, runs: list[Run], per_run: list[dict[str, Any]]) -> str |
     return "fig_wave.png"
 
 
+MERCHANT_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6"]
+ROW_ORDER = [
+    "Procyon",
+    "Sirius",
+    "Sol",
+    "Alpha Centauri",
+    "Wolf 359",
+    "Ross 128",
+    "Lalande 21185",
+]  # 相邻行在空间上也相邻
+
+
+def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
+    """一局的"世界线"：每段航程从 (出发时刻, 出发站) 连到 (到港时刻, 目的地)，按商人着色。"""
+    rows = [s for s in ROW_ORDER if s in run.world["stations"]]
+    y = {s: i for i, s in enumerate(rows)}
+    fig, ax = plt.subplots(figsize=(12, 4.6))
+    for sh in run.world["shocks"]:
+        if sh["station"] in y:
+            ax.fill_between(
+                [sh["t_start"], sh["t_end"]],
+                y[sh["station"]] - 0.32,
+                y[sh["station"]] + 0.32,
+                color="#e1e0d9",
+                lw=0,
+                zorder=1,
+            )
+            ax.annotate(
+                f"{sh['good']} {sh['kind']}",
+                (sh["t_start"] + 0.2, y[sh["station"]] + 0.36),
+                fontsize=6.5,
+                color=MUTED,
+                va="bottom",
+            )
+    merchants = list(run.meta["final"])
+    for k, m in enumerate(merchants):
+        color = MERCHANT_COLORS[k % len(MERCHANT_COLORS)]
+        trips = [t for t in run.trips if t.merchant == m]
+        for t in trips:
+            t_arr = (
+                t.t_arr
+                if t.t_arr is not None
+                else min(t.t_dep + t.distance / t.speed, run.meta["t_end"])
+            )
+            ax.plot(
+                [t.t_dep, t_arr],
+                [y[t.origin], y[t.dest]],
+                color=color,
+                lw=1.3,
+                alpha=0.85,
+                solid_capstyle="round",
+                zorder=3,
+            )
+        for a, b in zip(trips, trips[1:], strict=False):  # 停靠等待
+            if a.t_arr is not None and b.t_dep - a.t_arr > 0.05:
+                ax.plot(
+                    [a.t_arr, b.t_dep],
+                    [y[a.dest]] * 2,
+                    color=color,
+                    lw=3,
+                    alpha=0.5,
+                    solid_capstyle="butt",
+                    zorder=2,
+                )
+        ax.plot([], [], color=color, lw=2, label=m)
+    ax.set_yticks(range(len(rows)), rows)
+    ax.set_xlim(0, run.meta["t_end"])
+    ax.set_ylim(-0.6, len(rows) - 0.3)
+    ax.grid(axis="y", color=GRID, lw=0.8)
+    ax.grid(axis="x", visible=False)
+    ax.set_xlabel("银河年（坐标时 t）")
+    ax.set_title(
+        f"{LABEL.get(run.condition, run.condition)} · 世界 {run.meta['world_seed']} · "
+        f"重复 {run.meta['replicate']}：6 个商人 {run.meta['t_end']:g} 年的航程"
+        "（斜线 = 飞行，粗横线 = 停靠等待，灰带 = 冲击）",
+        loc="left",
+    )
+    ax.legend(ncol=6, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.13))
+    fig.tight_layout()
+    fig.savefig(out / name, dpi=180)
+    plt.close(fig)
+    return name
+
+
 def _fmt(ms: dict[str, Any], digits: int = 0, pct: bool = False) -> str:
     if ms.get("mean") is None:
         return "–"
@@ -408,6 +492,11 @@ def write_report(
         "warning": fig_warning(out, per_run),
         "wave": fig_wave(out, runs, per_run),
     }
+    showcase = next(
+        (r for r in runs if r.condition == "llm-light"),
+        next((r for r in runs if r.condition == "greedy-light"), None),
+    )
+    figs["spacetime"] = fig_spacetime(out, showcase) if showcase is not None else None
     conds = [c for c in ORDER if c in summary]
     L: list[str] = []
     L.append("# 相对论星际贸易：实验数据报告")
@@ -447,6 +536,11 @@ def write_report(
     )
     L.append("")
     sections = [
+        (
+            "一局的世界线",
+            "spacetime",
+            "示例局：每条斜线是一段航程，斜率越陡飞得越快；可以看到航线、" "扎堆和冲击期间的绕行。",
+        ),
         ("终局净值", "networth", "推理（LLM vs 贪心）和物理（光速 vs 瞬时 vs 牛顿）各自的效果。"),
         (
             "速度分层",
