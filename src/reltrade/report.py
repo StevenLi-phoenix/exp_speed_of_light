@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import math
 import statistics
@@ -747,6 +748,7 @@ def _reasoning(
     summary: dict[str, Any],
     showcase: Run | None,
     audit: dict[str, tuple[int, int]] | None = None,
+    excluded: int = 0,
 ) -> None:
     llm_conds = [c for c in conds if summary[c]["concepts"]]
     if not llm_conds:
@@ -770,10 +772,15 @@ def _reasoning(
         L.append(f"| {label} | {cells} |")
     L.append("")
     if audit:
+        held_out = (
+            f"（不含调关键词规则时已经看过的 {excluded} 次停靠，名单见 audit_exclude.json）"
+            if excluded
+            else ""
+        )
         L.append(
-            "「人工核对」：每个概念从全部 LLM 局里随机抽若干次命中的停靠，人读命中的句子判断是否真在谈"
-            "这个概念（明细见 concept_audit.csv）。这只衡量误报（精度），不衡量漏报：换个说法的提及"
-            "关键词抓不到。精度接近 100% 的概念，表中占比可以看作「提到」的下限。"
+            f"「人工核对」：每个概念从全部 LLM 局里随机抽若干次命中的停靠{held_out}，人读命中的句子"
+            "判断是否真在谈这个概念（明细见 concept_audit.csv）。这只衡量误报（精度），不衡量漏报："
+            "换个说法的提及关键词抓不到。精度接近 100% 的概念，表中占比可以看作「提到」的下限。"
         )
         L.append("")
     if showcase is None or not showcase.docks:
@@ -885,7 +892,9 @@ def write_report(
     _behavior(L, conds, summary)
     audit_path = out / "concept_audit.csv"
     audit = audit_precision(audit_path) if audit_path.exists() else None
-    _reasoning(L, conds, summary, showcase, audit)
+    exclude_path = out / "audit_exclude.json"
+    excluded = len(json.loads(exclude_path.read_text())) if exclude_path.exists() else 0
+    _reasoning(L, conds, summary, showcase, audit, excluded)
     sections = [
         (
             "一局的世界线",

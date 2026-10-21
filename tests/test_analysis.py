@@ -463,3 +463,8 @@ def test_report_adds_audit_column_when_labels_exist(runs_dir: Path, tmp_path: Pa
     write_report(tmp_path, [base, fake], per_run, summarize(per_run))
     text = (tmp_path / "report.md").read_text()
     assert "人工核对：真 / 抽查" in text and "| 1 / 1 |" in text
+    assert "audit_exclude.json" not in text
+    # 调关键词规则时看过的停靠不进抽样：报告要说明这是一批没看过的样本
+    (tmp_path / "audit_exclude.json").write_text(json.dumps(["r|A|1.0000", "r|B|2.0000"]))
+    write_report(tmp_path, [base, fake], per_run, summarize(per_run))
+    assert "不含调关键词规则时已经看过的 2 次停靠" in (tmp_path / "report.md").read_text()
