@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import math
 import statistics
 from collections import defaultdict
@@ -19,6 +20,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+
+# 中文字体回退链里每找不到一个字重就会打一条 WARNING，淹没真正的日志
+logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 from reltrade.analysis import (  # noqa: E402
     CONCEPT_LABEL,
@@ -107,27 +111,37 @@ def _rapidity(beta: np.ndarray) -> np.ndarray:
 
 def fig_networth(out: Path, per_run: list[dict[str, Any]]) -> str:
     conds = _conds(per_run)
-    fig, ax = plt.subplots(figsize=(8.5, 4.2))
+    fig, ax = plt.subplots(figsize=(1.6 * len(conds) + 1.5, 4.4))
+    labels: list[str] = []
     for i, c in enumerate(conds):
-        vals = [v for m in per_run if m["condition"] == c for v in m["net"].values()]
-        ax.scatter(
-            i + _jitter(len(vals), seed=i),
-            vals,
-            s=22,
-            **_dot_kw(c, 0.75),
-            zorder=3,
-        )
-        mean = statistics.mean(vals)
+        ms = [m for m in per_run if m["condition"] == c]
+        vals = [v for m in ms for v in m["net"].values()]
+        alts = [m["net_alt"][n] for m in ms for n in m["net"]]
+        xs = i + _jitter(len(vals), seed=i)
+        ax.scatter(xs, vals, s=22, **_dot_kw(c, 0.75), zorder=3)
+        for x, v, a in zip(xs, vals, alts, strict=True):  # 跨终局航程：竖线拉到留在港口的值
+            if abs(v - a) > 1:
+                ax.plot([x, x], [v, a], color=COLOR[c], lw=1, alpha=0.8, zorder=2)
+                ax.plot([x - 0.05, x + 0.05], [a, a], color=COLOR[c], lw=1.4, zorder=2)
+        mean, alt = statistics.mean(vals), statistics.mean(alts)
         ax.plot(
             [i - 0.32, i + 0.32], [mean, mean], color=INK, lw=2, solid_capstyle="round", zorder=4
         )
-        ax.annotate(f"{mean / 1000:.1f}k", (i + 0.36, mean), va="center", fontsize=9, color=INK)
+        label = f"{LABEL[c]}\n{mean / 1000:.1f}k"
+        if abs(mean - alt) > 0.005 * mean:
+            ax.plot([i - 0.32, i + 0.32], [alt, alt], color=INK, lw=1, ls=(0, (2, 2)), zorder=4)
+            label += f"（{alt / 1000:.1f}k）"
+        labels.append(label)
     ax.axhline(2000, color=BASE, lw=1, zorder=1)
     ax.annotate("起始 2,000¢", (-0.45, 2000), va="bottom", ha="left", fontsize=8.5, color=MUTED)
-    ax.set_xticks(range(len(conds)), [LABEL[c] for c in conds])
+    ax.set_xticks(range(len(conds)), labels)
     ax.set_ylabel("终局净值（¢）")
     ax.yaxis.set_major_formatter(lambda v, _: f"{v / 1000:.0f}k")
-    ax.set_title("每个商人的终局净值（点）与组均值（横线）", loc="left")
+    ax.set_title(
+        "每个商人的终局净值（点）与组均值（实线）。竖线和虚线：去掉跨终局的最后一程后的净值"
+        "与组均值（括号）",
+        loc="left",
+    )
     fig.tight_layout()
     fig.savefig(out / "fig_networth.png", dpi=180)
     plt.close(fig)
@@ -797,10 +811,11 @@ def write_report(
     L.append("## 总览")
     L.append("")
     L.append(
-        "| 对照组 | 局数（世界） | 每局商人均净值 | 基尼 | 每局航程 | ore / tech / med 中位速度 |"
-        " 意外度均值 | 意外度<0.8 | 到港没卖主货 | 预警<0.5 年 | 每局消息 | 平均船时 τ | 破产 | LLM 花费 |"
+        "| 对照组 | 局数（世界） | 每局商人均净值 | 不计跨终局航程 | 终局在途 | 基尼 | 每局航程 |"
+        " ore / tech / med 中位速度 | 意外度均值 | 意外度<0.8 | 到港没卖主货 | 预警<0.5 年 | 每局消息 |"
+        " 平均船时 τ | 破产 | LLM 花费 |"
     )
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for c in conds:
         s = summary[c]
         sp = s["speed_by_good"]
@@ -811,7 +826,8 @@ def write_report(
         )
         L.append(
             f"| {LABEL[c]} | {s['runs']}（{','.join(map(str, s['worlds']))}） | "
-            f"{_fmt(s['net_mean'])} | {_fmt(s['gini'], 2)} | {_fmt(s['trips'], 1)} | "
+            f"{_fmt(s['net_mean'])} | {_fmt(s['net_alt_mean'])} | "
+            f"{_fmt(s['in_flight_share'], 0, True)} | {_fmt(s['gini'], 2)} | {_fmt(s['trips'], 1)} | "
             f"{speeds} | {_fmt(s['surprise_mean'], 2)} | {_fmt(s['surprise_bad'], 0, True)} | "
             f"{_fmt(s['unsold_share'], 0, True)} | "
             f"{_fmt(s['raid_share'], 0, True)} | {_fmt(s['messages'], 1)} | "
@@ -822,7 +838,10 @@ def write_report(
         "「±」是跨局标准差。贪心组多世界 seed，用来估计世界之间的差异；LLM 组同一世界多次重复，"
         "差异来自采样随机性。意外度 = 到港那一刻按目的地真实报价卖掉主货能得的收入 ÷ 出发时按看到的"
         "报价算的预期，所有载货航程都算，与到港后卖不卖无关；「到港没卖主货」是到港后没在目的地卖主货"
-        "（带走或囤着）的航程比例。"
+        "（带走或囤着）的航程比例。「终局在途」是第 100 年还在飞的商人比例：规则让在途的货按目的地的"
+        "终局报价清算（扣掉腐败），LLM 会专门在最后几年启程去一个终局之后才到的地方，贪心只选终局前能到的"
+        "航程。「不计跨终局航程」把这最后一程换成「不出发、留在港口」：本站买进的货按买价退回，带过来的货"
+        "按出发站当时的报价卖掉，退回能源和航程工资，改付停靠工资。比较 LLM 和贪心时以这一列为准。"
     )
     L.append("")
     _behavior(L, conds, summary)
@@ -923,6 +942,9 @@ def write_report(
     if llm_runs:
         L.append("## 商人之间的消息（摘录）")
         L.append("")
+        if not any(m["message_samples"] for _, m in llm_runs):
+            L.append("没有任何 LLM 商人发过消息（send_message 一直可用，可以私信、广播、撒谎）。")
+            L.append("")
         for r, m in llm_runs:
             if not m["message_samples"]:
                 continue

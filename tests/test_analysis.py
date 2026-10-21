@@ -13,6 +13,7 @@ from reltrade.analysis import (
     audit_precision,
     audit_sample,
     concepts,
+    crossing_gain,
     excerpt,
     load_docks,
     load_runs,
@@ -21,6 +22,7 @@ from reltrade.analysis import (
     summarize,
     write_audit,
 )
+from reltrade.engine import DecisionContext
 from reltrade.experiment import run_one
 from reltrade.report import _plane, fig_ghosts, write_report
 from reltrade.world import make_world
@@ -206,12 +208,84 @@ def test_light_warning_is_d_times_inverse_beta_minus_one(runs_dir: Path) -> None
         assert w["warning"] == pytest.approx(t.distance * (1 / t.speed - 1))
 
 
+class _Endgame:
+    """脚本商人：开局买 ore；偶数号直接去最远的站，奇数号先去最近的站、到港不卖再去最远的站。
+    两种都在终局之后才到，分别覆盖「本站买进」和「带过来的货」两条清算路径。"""
+
+    def __init__(self, *_: object) -> None:
+        self.docks = 0
+
+    async def decide(self, ctx: DecisionContext) -> None:
+        self.docks += 1
+        w = ctx.world
+        others = sorted(
+            (w.distance(ctx.station, s), s) for s in w.station_names if s != ctx.station
+        )
+        if self.docks == 1:
+            ctx.buy("ore", min(40.0, 0.2 * ctx.local_board().quotes["ore"].stock))
+        if self.docks == 1 and w.merchant_names.index(ctx.m.name) % 2:
+            ctx.depart(others[0][1], 0.9)
+        else:
+            ctx.depart(others[-1][1], 0.5)
+
+
+@pytest.fixture(scope="module")
+def endgame_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("endgame")
+    mp = pytest.MonkeyPatch()
+    mp.setattr("reltrade.experiment.GreedyMerchant", _Endgame)
+    try:
+        asyncio.run(run_one("greedy-light", 3, 0, out_root=root, client=None, t_end=12.0))
+    finally:
+        mp.undo()
+    return root
+
+
+def test_crossing_gain_restores_the_stay_in_port_counterfactual(endgame_dir: Path) -> None:
+    (run,) = load_runs(endgame_dir)
+    markets = rebuild_markets(run)
+    gain = crossing_gain(run, markets)
+    rules, t_end = run.world["rules"], run.meta["t_end"]
+    expected = []
+    for i, (n, f) in enumerate(run.meta["final"].items()):
+        assert f["in_flight"]
+        recs = [r for r in run.records if r["merchant"] == n]
+        deps = [r for r in recs if r["type"] == "depart"]
+        if i % 2 == 0:  # 开局买货直接出发：反事实就是拿着起始现金在港口等到终局
+            alt = rules["start_cash"] - rules["wage"] * t_end
+        else:  # 第二站带着没卖的 ore 出发：反事实是在那里卖掉，在港口等到终局
+            (buy,) = [r for r in recs if r["type"] == "trade"]
+            first, last = deps
+            liq = markets[last["station"]].quote_sell(last["t"], "ore", last["cargo"]["ore"])
+            alt = (
+                rules["start_cash"]
+                - buy["value"]
+                - first["energy_cost"]
+                - first["wages"]
+                + liq
+                - rules["wage"] * (t_end - last["t"])
+            )
+        assert f["net_worth"] - gain[n] == pytest.approx(alt)
+        expected.append(alt)
+    m = run_metrics(run)
+    assert m["in_flight_share"] == 1.0
+    assert m["net_alt_mean"] == pytest.approx(sum(expected) / len(expected))
+
+
+def test_crossing_gain_is_zero_when_everyone_is_docked(runs_dir: Path) -> None:
+    for run in load_runs(runs_dir):  # 贪心只选终局前能到的航程
+        assert set(crossing_gain(run, rebuild_markets(run)).values()) == {0.0}
+        m = run_metrics(run)
+        assert m["in_flight_share"] == 0.0 and m["net_alt_mean"] == m["net_mean"]
+
+
 def test_report_renders(runs_dir: Path, tmp_path: Path) -> None:
     runs = load_runs(runs_dir)
     per_run = [run_metrics(r) for r in runs]
     write_report(tmp_path, runs, per_run, summarize(per_run))
     text = (tmp_path / "report.md").read_text()
     assert "## 总览" in text and "贪心·光速" in text and "## 行为" in text
+    assert "不计跨终局航程" in text and "终局在途" in text
     assert "## 推理里提到了什么" not in text  # 贪心组没有 transcript
     for fig in (
         "fig_networth.png",

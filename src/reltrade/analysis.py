@@ -351,6 +351,41 @@ def arrival_surprise(trip: Trip, markets: dict[str, StationMarket]) -> float | N
     return sell_revenue_from_quote(quote, q) / expected
 
 
+def crossing_gain(run: Run, markets: dict[str, StationMarket]) -> dict[str, float]:
+    """终局时仍在飞的商人：最后这趟跨过终局的航程比「不出发、留在港口」多出的净值；停靠的商人为 0。
+    规则让在途的货按目的地的终局报价清算，LLM 会专门在最后几年启程去一个终局之后才到的地方，
+    贪心只选终局前能到的航程。反事实：这一站买进的货按买价退回，带过来的货按出发站当时的报价卖掉，
+    退回能源和航程工资，改付停靠到终局的工资。"""
+    wage, t_end = run.world["rules"]["wage"], run.meta["t_end"]
+    out: dict[str, float] = {}
+    for n, f in run.meta["final"].items():
+        if not f["in_flight"]:
+            out[n] = 0.0
+            continue
+        dep = [r for r in run.records if r["merchant"] == n and r["type"] == "depart"][-1]
+        bought: dict[str, tuple[float, float]] = defaultdict(
+            lambda: (0.0, 0.0)
+        )  # 货 → (数量, 花费)
+        for r in run.records:
+            if (
+                r["merchant"] == n
+                and r["type"] == "trade"
+                and r["side"] == "buy"
+                and r["t"] == dep["t"]
+            ):
+                q, v = bought[r["good"]]
+                bought[r["good"]] = (q + r["qty"], v + r["value"])
+        stay = dep["energy_cost"] + dep["wages"] - wage * (t_end - dep["t"])
+        for g, q in dep["cargo"].items():
+            qb, vb = bought[g]
+            if qb > 0:
+                stay += vb * min(1.0, q / qb)
+            if q - qb > 1e-9:
+                stay += markets[dep["station"]].quote_sell(dep["t"], g, q - qb)
+        out[n] = f["cargo_value"] - stay
+    return out
+
+
 # ---------------- 每局指标 ----------------
 
 
@@ -420,6 +455,11 @@ def run_metrics(run: Run) -> dict[str, Any]:
     # 意外度与拥挤：意外度按到港时刻的真实报价算（见 arrival_surprise），所有载货航程都算；
     # 另记卖掉的那部分的实际意外度，以及到港后没卖主货的比例
     markets = rebuild_markets(run)
+    # 终局：跨过终局的最后一程换成「留在港口」后的净值（贪心从不跨终局，两者相同）
+    gain = crossing_gain(run, markets)
+    out["net_alt"] = {n: f["net_worth"] - gain[n] for n, f in final.items()}
+    out["net_alt_mean"] = statistics.mean(out["net_alt"].values())
+    out["in_flight_share"] = sum(f["in_flight"] for f in final.values()) / len(final)
     sells = [r for r in run.records if r["type"] == "trade" and r["side"] == "sell"]
     surprises, crowd_pairs, realized = [], [], []
     unsold = 0
@@ -569,6 +609,8 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
             "runs": len(ms),
             "worlds": sorted({m["world_seed"] for m in ms}),
             "net_mean": _ms([m["net_mean"] for m in ms]),
+            "net_alt_mean": _ms([m["net_alt_mean"] for m in ms]),
+            "in_flight_share": _ms([m["in_flight_share"] for m in ms]),
             "gini": _ms([m["gini"] for m in ms]),
             "trips": _ms([m["trips"] for m in ms]),
             "speed_by_good": {g: _ms(v) for g, v in pooled_speed.items()},
