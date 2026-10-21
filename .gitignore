@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+*.egg-info/
+# 实验原始产物：LLM 缓存（含完整请求/响应）和每局运行目录，体积大，不进 git
+cache/
+runs/
+.*.bak.*
