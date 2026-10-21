@@ -745,6 +745,19 @@ def _behavior(L: list[str], conds: list[str], summary: dict[str, Any]) -> None:
         "正常库存是 120–400 单位。「其中运往冲击站」是之后那段里同一次停靠就运往冲击站的量。"
     )
     L.append("")
+    L.append("| 对照组 | 交易毛利 | 能源 | 航程工资 |")
+    L.append("|---|---|---|---|")
+    for c in conds:
+        s = summary[c]
+        L.append(
+            f"| {LABEL[c]} | {_fmt(s['gross'])} | {_fmt(s['energy'])} | {_fmt(s['trip_wages'])} |"
+        )
+    L.append("")
+    L.append(
+        "成本结构：每个商人平均的现金流（¢）。交易毛利 = 卖出收入 − 买入支出；航程工资在出发时按船时预付，"
+        "停靠时另付停靠工资。终局都停靠时，净值 = 起始现金 + 交易毛利 − 能源 − 工资 × 船时 τ + 终局货值。"
+    )
+    L.append("")
 
 
 def _reasoning(

@@ -152,6 +152,18 @@ def test_trips_link_departures_arrivals_and_sales(runs_dir: Path) -> None:
         assert t.surprise(t.main) == pytest.approx(revenue / expected)
 
 
+def test_cost_structure_adds_up_to_net_worth(runs_dir: Path) -> None:
+    # 终局都停靠时：净值 = 起始现金 + 交易毛利 − 能源 − 工资 × 船时 + 终局货值，逐项相等
+    for run in load_runs(runs_dir):
+        m, rules, final = run_metrics(run), run.world["rules"], run.meta["final"]
+        assert not any(f["in_flight"] for f in final.values())
+        cargo = sum(f["cargo_value"] for f in final.values()) / len(final)
+        wages = rules["wage"] * m["tau_mean"]
+        expected = rules["start_cash"] + m["gross"] - m["energy"] - wages + cargo
+        assert m["net_mean"] == pytest.approx(expected)
+        assert 0 < m["trip_wages"] <= wages
+
+
 def test_arrival_surprise_equals_realized_when_sold_on_arrival(runs_dir: Path) -> None:
     """贪心到港即卖光：只要同一时刻没有别人在该站成交，按到港报价算的意外度就等于实际意外度。"""
     run = next(r for r in load_runs(runs_dir) if r.condition == "greedy-light")
@@ -326,7 +338,9 @@ def test_report_renders(runs_dir: Path, tmp_path: Path) -> None:
     write_report(tmp_path, runs, per_run, summarize(per_run))
     text = (tmp_path / "report.md").read_text()
     assert "## 总览" in text and "贪心·光速" in text and "## 行为" in text
-    assert "不计跨终局航程" in text and "终局在途" in text
+    assert (
+        "不计跨终局航程" in text and "终局在途" in text and "| 交易毛利 | 能源 | 航程工资 |" in text
+    )
     assert "## 推理里提到了什么" not in text  # 贪心组没有 transcript
     for fig in (
         "fig_networth.png",

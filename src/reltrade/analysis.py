@@ -419,6 +419,19 @@ def _spearman(x: list[float], y: list[float]) -> float | None:
     return float(np.corrcoef(rx, ry)[0, 1])
 
 
+def _cost_structure(run: Run) -> dict[str, float]:
+    """每个商人平均的现金流（¢）：交易毛利 = 卖出 − 买入；能源；航程工资（出发时按船时预付）。"""
+    n = len(run.meta["final"])
+    deps = [r for r in run.records if r["type"] == "depart"]
+    trades = [r for r in run.records if r["type"] == "trade"]
+    sign = {"sell": 1.0, "buy": -1.0}
+    return {
+        "gross": sum(sign[r["side"]] * r["value"] for r in trades) / n,
+        "energy": sum(r["energy_cost"] for r in deps) / n,
+        "trip_wages": sum(r["wages"] for r in deps) / n,
+    }
+
+
 def run_metrics(run: Run) -> dict[str, Any]:
     final = run.meta["final"]
     nets = [f["net_worth"] for f in final.values()]
@@ -439,6 +452,7 @@ def run_metrics(run: Run) -> dict[str, Any]:
         "empty_trips": sum(1 for t in run.trips if t.main == "empty"),
         "tau_mean": statistics.mean(tau.values()),
         "waits": sum(1 for r in run.records if r["type"] == "wait"),
+        **_cost_structure(run),
         "forced_waits": sum(1 for r in run.records if r["type"] == "wait" and r["forced"]),
     }
     # 速度分层
@@ -685,6 +699,7 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
             "dist_mean": _ms([m["dist_mean"] for m in ms]),
             "info_age_mean": _ms([m["info_age_mean"] for m in ms]),
             "waits": _ms([m["waits"] for m in ms]),
+            **{k: _ms([m[k] for m in ms]) for k in ("gross", "energy", "trip_wages")},
             "main_share": {g: _ms([m["main_share"][g] for m in ms]) for g in (*GOODS, "empty")},
             "concepts": (
                 {k: _ms([m["concepts"][k] for m in with_docks]) for k in CONCEPTS}
