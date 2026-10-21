@@ -394,6 +394,105 @@ def fig_wave(out: Path, runs: list[Run], per_run: list[dict[str, Any]]) -> str |
     return "fig_wave.png"
 
 
+SHORT = {
+    "Alpha Centauri": "α Cen",
+    "Wolf 359": "Wolf",
+    "Lalande 21185": "Lalande",
+    "Ross 128": "Ross",
+}
+
+
+def _plane(world: dict[str, Any], iters: int = 300) -> dict[str, tuple[float, float]]:
+    """星图的二维布局：从 PCA 投影出发做 SMACOF（stress MDS）迭代，
+    把三维距离的误差摊到所有星对上，而不是把第三维整个压扁（Wolf 和 Lalande 会叠在一起）。"""
+    names = list(world["stations"])
+    xyz = np.array([world["stations"][s]["pos"] for s in names], dtype=float)
+    xyz -= xyz.mean(axis=0)
+    _, _, vt = np.linalg.svd(xyz, full_matrices=False)
+    xy = xyz @ vt[:2].T
+    target = np.linalg.norm(xyz[:, None] - xyz[None], axis=-1)
+    n = len(names)
+    for _ in range(iters):
+        d = np.linalg.norm(xy[:, None] - xy[None], axis=-1)
+        b = -target / np.where(d > 1e-12, d, 1e-12)
+        np.fill_diagonal(b, 0.0)
+        np.fill_diagonal(b, -b.sum(axis=1))
+        xy = b @ xy / n
+    return {s: (float(x), float(y)) for s, (x, y) in zip(names, xy, strict=True)}
+
+
+def fig_network(out: Path, runs: list[Run], per_run: list[dict[str, Any]]) -> str:
+    """小多图：行 = 商人（贪心 / LLM），列 = 物理条件；线宽按全图统一刻度，可跨面板比较。"""
+    conds = _conds(per_run)
+    phys = [p for p in PHYS_COLOR if any(c.endswith(p) for c in conds)]
+    agents = [a for a in ("greedy", "llm") if any(c.startswith(a) for c in conds)]
+    pos = _plane(runs[0].world)
+    pairs, calls, nruns = {}, {}, {}
+    for c in conds:
+        rs = [r for r in runs if r.condition == c]
+        nruns[c] = len(rs)
+        pc: dict[tuple[str, str], int] = defaultdict(int)
+        cc: dict[str, int] = defaultdict(int)
+        for r in rs:
+            for t in r.trips:
+                pc[tuple(sorted((t.origin, t.dest)))] += 1
+                cc[t.dest] += 1
+        pairs[c], calls[c] = pc, cc
+    top = max((n / nruns[c] for c in conds for n in pairs[c].values()), default=1.0)
+    fig, axes = plt.subplots(
+        len(agents), len(phys), figsize=(3.7 * len(phys), 3.6 * len(agents)), squeeze=False
+    )
+    for i, a in enumerate(agents):
+        for j, p in enumerate(phys):
+            ax = axes[i][j]
+            ax.set_aspect("equal")
+            ax.axis("off")
+            c = f"{a}-{p}"
+            if c not in pairs:
+                continue
+            for (s1, s2), n in sorted(pairs[c].items(), key=lambda kv: kv[1]):
+                w = n / nruns[c] / top
+                ax.plot(
+                    [pos[s1][0], pos[s2][0]],
+                    [pos[s1][1], pos[s2][1]],
+                    color=COLOR[c],
+                    lw=0.4 + 8 * w,
+                    alpha=0.35 + 0.45 * w,
+                    solid_capstyle="round",
+                    zorder=2,
+                )
+            total = sum(calls[c].values()) or 1
+            for s, (x, y) in pos.items():
+                size = 25 + 1100 * calls[c].get(s, 0) / total
+                ax.scatter([x], [y], s=size, color=SURFACE, edgecolors=INK2, lw=1.1, zorder=3)
+                ax.annotate(
+                    SHORT.get(s, s),
+                    (x, y),
+                    xytext=(0, -(size**0.5) / 2 - 2),
+                    textcoords="offset points",
+                    ha="center",
+                    va="top",
+                    fontsize=7.5,
+                    color=INK2,
+                    zorder=4,
+                )
+            per = sum(pairs[c].values()) / nruns[c]
+            ax.set_title(f"{LABEL[c]} · 每局 {per:.0f} 程", loc="left", fontsize=9.5)
+    fig.suptitle(
+        "贸易网络：线宽 = 每局两站之间的航程数（各面板同一刻度），圆面积 = 到港占比；"
+        "星图按三维距离做 MDS 摊平（有少量变形）",
+        x=0.01,
+        ha="left",
+        fontsize=10.5,
+        fontweight="semibold",
+        color=INK,
+    )
+    fig.tight_layout()
+    fig.savefig(out / "fig_network.png", dpi=180)
+    plt.close(fig)
+    return "fig_network.png"
+
+
 MERCHANT_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6"]
 ROW_ORDER = [
     "Procyon",
@@ -557,6 +656,7 @@ def write_report(
         "shock": fig_shock(out, per_run),
         "warning": fig_warning(out, per_run),
         "wave": fig_wave(out, runs, per_run),
+        "network": fig_network(out, runs, per_run),
     }
     showcase = next(
         (r for r in runs if r.condition == "llm-light"),
@@ -617,6 +717,12 @@ def write_report(
             "牛顿组单位是 ly/yr。",
         ),
         ("能源与枢纽", "ports", "能源便宜的星站会不会成为枢纽。"),
+        (
+            "贸易网络",
+            "network",
+            "谁和谁做生意。光速延迟下远方的报价更旧，贸易是否收缩到彼此近的星团里，"
+            "对比同一行的光速列和瞬时信息列。",
+        ),
         (
             "过时报价与扎堆",
             "surprise",

@@ -16,7 +16,8 @@ from reltrade.analysis import (
     summarize,
 )
 from reltrade.experiment import run_one
-from reltrade.report import write_report
+from reltrade.report import _plane, write_report
+from reltrade.world import make_world
 
 pytestmark = pytest.mark.integration
 NAMES = ("Asel", "Bram", "Chen", "Dara", "Emre", "Faye")
@@ -145,8 +146,19 @@ def test_report_renders(runs_dir: Path, tmp_path: Path) -> None:
         "fig_surprise.png",
         "fig_shock.png",
         "fig_warning.png",
+        "fig_network.png",
     ):
         assert (tmp_path / fig).stat().st_size > 10_000
+
+
+@pytest.mark.unit
+def test_plane_projection_keeps_coplanar_distances() -> None:
+    pts = {"A": [0, 0, 0], "B": [1, 1, 0], "C": [0, 1, 1], "D": [2, 1, -1]}  # 都在 x − y + z = 0 上
+    xy = _plane({"stations": {s: {"pos": p} for s, p in pts.items()}})
+    for a in pts:
+        for b in pts:
+            d3 = math.dist(pts[a], pts[b])
+            assert math.dist(xy[a], xy[b]) == pytest.approx(d3, abs=1e-9)
 
 
 def test_report_renders_reasoning_section(runs_dir: Path, tmp_path: Path) -> None:
@@ -163,3 +175,17 @@ def test_report_renders_reasoning_section(runs_dir: Path, tmp_path: Path) -> Non
     text = (tmp_path / "report.md").read_text()
     assert "## 推理里提到了什么" in text
     assert f"**信息过时 / 光速延迟** · Asel y1.0 @ Sol：{said}" in text
+
+
+@pytest.mark.unit
+def test_star_layout_spreads_distortion() -> None:
+    world = make_world(7)
+    w = {"stations": {s: {"pos": list(spec.pos)} for s, spec in world.stations.items()}}
+
+    def worst(xy: dict[str, tuple[float, float]]) -> float:
+        return max(
+            abs(math.dist(xy[a], xy[b]) / world.distance(a, b) - 1) for a in xy for b in xy if a < b
+        )
+
+    pca = worst(_plane(w, iters=0))  # 纯投影：Wolf 和 Lalande 几乎重合
+    assert pca > 0.5 and worst(_plane(w)) < 0.35
