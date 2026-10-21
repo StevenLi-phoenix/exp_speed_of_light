@@ -242,12 +242,8 @@ async def main_async(args: argparse.Namespace) -> int:
             concurrency=args.concurrency,
             offline=args.offline,
         )
-    jobs = [
-        (c, s, r)
-        for c in conditions
-        for s in parse_range(args.seeds)
-        for r in range(args.replicates)
-    ]
+    reps = parse_range(args.reps) if args.reps else list(range(args.replicates))
+    jobs = [(c, s, r) for c in conditions for s in parse_range(args.seeds) for r in reps]
     sem = asyncio.Semaphore(args.parallel_runs)
     failures: list[str] = []
 
@@ -292,6 +288,9 @@ def main() -> None:
     p.add_argument("--conditions", required=True)
     p.add_argument("--seeds", default="7")
     p.add_argument("--replicates", type=int, default=1)
+    p.add_argument(
+        "--reps", default="", help="explicit replicate indices, e.g. 1-2 (overrides --replicates)"
+    )
     p.add_argument("--t-end", type=float, default=Rules().t_end)
     p.add_argument("--model", default="deepseek-v4.1-flash")
     p.add_argument("--temperature", type=float, default=1.0)
