@@ -73,7 +73,7 @@ def _physics_block(kin: Kinematics, c_info: float) -> str:
             )
     else:
         lines = [
-            "- All stations share one Galactic time t (years). There is no speed limit and no "
+            "- All stations share one Galactic time t (years). There is no light-speed barrier and no "
             "time dilation: ship time equals Galactic time.",
             f"- Your ship jumps instantly to any cruise speed v (light-years per year, "
             f"0 < v ≤ {kin.max_speed:g}), coasts, and stops instantly at the destination. "
