@@ -31,6 +31,10 @@ class ActionError(ValueError):
     """商人提交了不合法的动作；错误信息会原样返回给商人。"""
 
 
+# 报告里数量显示到 0.01；商人照抄显示值时，超出实际持仓/空间不到这么多就按实际值成交
+ROUNDING = 0.05
+
+
 @dataclass(frozen=True)
 class Transit:
     origin: str
@@ -226,8 +230,12 @@ class DecisionContext:
         rules, market = self.world.rules, self.engine.markets[self.station]
         hold_after = self.hold_used() + q * self.world.goods[g].mass
         if hold_after > rules.hold_capacity + 1e-9:
-            room = (rules.hold_capacity - self.hold_used()) / self.world.goods[g].mass
-            raise ActionError(f"hold too small: room for {room:.1f} more {g}")
+            room = max((rules.hold_capacity - self.hold_used()) / self.world.goods[g].mass, 0.0)
+            if q - room > ROUNDING:
+                raise ActionError(f"hold too small: room for {room:.2f} more {g}")
+            q = room  # 超出量在显示精度以内：按剩余空间成交
+            if q <= 1e-9:
+                raise ActionError("your hold is full")
         try:
             cost = market.quote_buy(self.t, g, q)
         except MarketError as e:
@@ -253,9 +261,11 @@ class DecisionContext:
         self._check_open()
         g, q = self._check_good(good), self._check_qty(qty)
         held = self.m.cargo.get(g, 0.0)
-        if q > held + 1e-6:
+        if q > held + ROUNDING:
             raise ActionError(f"you hold only {held:.2f} {g}")
-        q = min(q, held)
+        q = min(q, held)  # 超出量在显示精度以内：视为全部卖出
+        if q <= 1e-9:
+            raise ActionError(f"you hold no {g}")
         revenue = self.engine.markets[self.station].sell(self.t, g, q)
         self.m.cash += revenue
         self.m.cargo[g] = held - q if held - q > 1e-9 else 0.0

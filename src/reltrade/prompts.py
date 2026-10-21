@@ -233,7 +233,7 @@ def _event_line(e: Event, kin: Kinematics) -> str:
     if e.kind == "arrive":
         return f"{head} {e.actor} arrived from {d['from']}"
     if e.kind == "depart":
-        cargo = ", ".join(f"{g} {q:.1f}" for g, q in d["cargo"].items()) or "nothing"
+        cargo = ", ".join(f"{g} {q:.2f}" for g, q in d["cargo"].items()) or "nothing"
         return (
             f"{head} {e.actor} departed for {d['to']} at {_speed(d['speed'], kin)} "
             f"(ETA y{d['eta']:.2f}) carrying {cargo}"
@@ -267,7 +267,7 @@ def render_observation(
         f"ship clock {obs.tau:.2f} y — {left:.2f} Galactic years left"
     ]
     lines += [f"• {n}" for n in obs.notices]
-    cargo = ", ".join(f"{g} {q:.1f}" for g, q in obs.cargo.items()) or "empty"
+    cargo = ", ".join(f"{g} {q:.2f}" for g, q in obs.cargo.items()) or "empty"
     lines.append(
         f"Cash {_money(obs.cash)} · Hold {obs.hold_used:.3f}/{obs.hold_capacity:g} M "
         f"({cargo}) · Ship mass {obs.mass:.3f} M"
@@ -315,13 +315,13 @@ def render_observation(
 def render_result(tool: str, res: Any, kin: Kinematics, station: str = "") -> str:
     if tool == "buy":
         return (
-            f"Bought {res['qty']:.1f} {res['good']} for {_money(res['cost'])} "
+            f"Bought {res['qty']:.2f} {res['good']} for {_money(res['cost'])} "
             f"(avg {_price(res['avg'])}). Cash {_money(res['cash'])}. Hold "
             f"{res['hold_used']:.3f} M. {res['good']} ask is now {_price(res['ask_now'])}."
         )
     if tool == "sell":
         return (
-            f"Sold {res['qty']:.1f} {res['good']} for {_money(res['revenue'])} "
+            f"Sold {res['qty']:.2f} {res['good']} for {_money(res['revenue'])} "
             f"(avg {_price(res['avg'])}). Cash {_money(res['cash'])}. {res['good']} bid is "
             f"now {_price(res['bid_now'])}."
         )

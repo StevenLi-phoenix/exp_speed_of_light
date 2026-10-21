@@ -103,7 +103,7 @@ def test_tool_calls_execute_in_order_and_reasoning_is_stripped(tmp_path: Path) -
     eng, agent, client = run_single(replies, tmp_path, t_end=3.0)
     msgs = agent.messages
     tool_msgs = [m for m in msgs if m["role"] == "tool"]
-    assert tool_msgs[0]["content"].startswith("Bought 10.0 tech")
+    assert tool_msgs[0]["content"].startswith("Bought 10.00 tech")
     assert "Trip Sol → Wolf 359" in tool_msgs[1]["content"]
     assert tool_msgs[2]["content"].startswith("Notebook saved")
     assert tool_msgs[3]["content"].startswith("Departed for Wolf 359")

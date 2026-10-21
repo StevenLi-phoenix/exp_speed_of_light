@@ -209,3 +209,24 @@ def test_newtonian_requires_instant_information() -> None:
     w = make_world(7)
     with pytest.raises(ValueError):
         Engine(w, {}, c_info=LIGHT, kin=Newtonian())
+
+
+def test_display_rounding_tolerance_on_sell_and_buy() -> None:
+    state: dict[str, float] = {}
+
+    def trade(ctx: DecisionContext) -> None:
+        ctx.buy("tech", 10.0)
+        ctx.m.cargo["tech"] = 9.996  # 报告里显示为 10.00
+        state["sold"] = ctx.sell("tech", 10.0)["qty"]
+        with pytest.raises(ActionError):
+            ctx.sell("tech", 1.0)  # 已全部卖出
+        ctx.m.cargo["med"] = 0.03  # 留一点余量：剩余空间 ≈ 124.99 单位矿石
+        state["bought"] = ctx.buy("ore", 125.0)["qty"]
+        with pytest.raises(ActionError):
+            ctx.buy("ore", 1.0)
+        ctx.wait(5.0, "done")
+
+    eng, _ = engine_with({who_at("Wolf 359"): {1: trade}}, t_end=3.0)
+    asyncio.run(eng.run())
+    assert state["sold"] == pytest.approx(9.996)
+    assert state["bought"] == pytest.approx((1.0 - 0.03 * 0.003) / 0.008)

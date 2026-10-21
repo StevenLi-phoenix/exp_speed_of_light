@@ -295,7 +295,7 @@ def main() -> None:
     p.add_argument("--t-end", type=float, default=Rules().t_end)
     p.add_argument("--model", default="deepseek-v4.1-flash")
     p.add_argument("--temperature", type=float, default=1.0)
-    p.add_argument("--max-tokens", type=int, default=16384)
+    p.add_argument("--max-tokens", type=int, default=32768)
     p.add_argument("--concurrency", type=int, default=12, help="max concurrent LLM requests")
     p.add_argument("--parallel-runs", type=int, default=8)
     p.add_argument("--out", default=str(ROOT / "runs"))
