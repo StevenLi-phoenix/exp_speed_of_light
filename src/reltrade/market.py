@@ -65,7 +65,9 @@ class StationMarket:
 
     # ---- 状态查询 ----
     def inventory_at(self, t: float) -> dict[str, float]:
-        t = max(t, 0.0)  # 开局前的历史视为初始状态
+        if t < 0.0:
+            # 开局前的历史视为初始状态；不能夹到 t=0，否则 t=0 的成交会瞬间被任意远处看到
+            return dict(self._invs[0])
         i = bisect_right(self._times, t) - 1
         t0, inv0 = self._times[i], self._invs[i]
         return {g: self._evolve(g, s, t0, t) for g, s in inv0.items()}

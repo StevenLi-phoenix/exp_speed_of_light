@@ -88,3 +88,11 @@ def test_public_quote_formulas_match_execution() -> None:
     assert sell_revenue_from_quote(q, 40.0) == pytest.approx(m.quote_sell(2.5, "ore", 40.0))
     e = m.board_at(2.5).quotes[ENERGY]
     assert buy_cost_from_quote(e, 25.0) == pytest.approx(m.quote_buy(2.5, ENERGY, 25.0))
+
+
+def test_trades_at_time_zero_are_invisible_to_negative_retarded_times() -> None:
+    m = make_market()
+    initial = m.board_at(-1.0).quotes
+    m.buy(0.0, "ore", 50.0)
+    assert m.board_at(-3.0).quotes == initial  # 远方在 t=0 看到的是开局前的状态
+    assert m.board_at(0.0).quotes["ore"].stock == pytest.approx(150.0)

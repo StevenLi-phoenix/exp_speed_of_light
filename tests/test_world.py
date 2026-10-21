@@ -61,3 +61,12 @@ def test_segments_cover_interval_contiguously() -> None:
     assert segs == [(0.5, 1.0, 1.0), (1.0, 2.5, 2.0), (2.5, 3.0, 3.0)]
     assert list(sched.segments(2.0, 2.0)) == []
     assert sched.mult_at(-5.0) == 1.0
+
+
+def test_world_structure_does_not_depend_on_horizon() -> None:
+    from reltrade.world import Rules
+
+    short, long = make_world(7, Rules(t_end=40.0)), make_world(7)
+    assert short.starts == long.starts
+    for key, sched in short.schedules.items():
+        assert sched.mult_at(20.0) == pytest.approx(long.schedules[key].mult_at(20.0))

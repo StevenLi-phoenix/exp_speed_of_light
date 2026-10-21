@@ -117,21 +117,21 @@ def _m(ore: tuple[float, float], tech: tuple[float, float], med: tuple[float, fl
 STATIONS: dict[str, StationSpec] = {
     s.name: s
     for s in [
-        StationSpec("Sol", _pos("Sol"), _m((12, 300), (35, 250), (32, 300), (8, 1500)),
+        StationSpec("Sol", _pos("Sol"), _m((12, 300), (35, 250), (32, 300), (20, 1500)),
                     "old core world; makes cheap tech, hungry for ore"),
         StationSpec("Alpha Centauri", _pos("Alpha Centauri"),
-                    _m((13, 250), (45, 150), (40, 250), (10, 800)),
+                    _m((13, 250), (45, 150), (40, 250), (25, 800)),
                     "industrial colony; consumes ore, needs medicine"),
-        StationSpec("Wolf 359", _pos("Wolf 359"), _m((4, 400), (85, 120), (50, 200), (14, 500)),
+        StationSpec("Wolf 359", _pos("Wolf 359"), _m((4, 400), (75, 120), (45, 200), (35, 500)),
                     "mining outpost on a flare star; cheap ore, pricey energy, needs med and tech"),
         StationSpec("Lalande 21185", _pos("Lalande 21185"),
-                    _m((9, 250), (75, 120), (14, 400), (11, 600)),
+                    _m((9, 250), (75, 120), (14, 400), (28, 600)),
                     "bio-colony; cheap medicine, needs tech"),
-        StationSpec("Ross 128", _pos("Ross 128"), _m((5, 400), (80, 120), (20, 350), (12, 600)),
+        StationSpec("Ross 128", _pos("Ross 128"), _m((5, 400), (80, 120), (20, 350), (30, 600)),
                     "temperate frontier world; ore and some medicine, needs tech"),
-        StationSpec("Sirius", _pos("Sirius"), _m((11, 300), (55, 150), (45, 250), (1.5, 5000)),
+        StationSpec("Sirius", _pos("Sirius"), _m((13, 300), (60, 150), (48, 250), (3, 5000)),
                     "solar-power giant; by far the cheapest energy, needs ore and medicine"),
-        StationSpec("Procyon", _pos("Procyon"), _m((10, 250), (32, 250), (48, 250), (4, 2000)),
+        StationSpec("Procyon", _pos("Procyon"), _m((10, 250), (32, 250), (50, 250), (8, 2000)),
                     "tech foundries; cheap tech and cheap energy, needs medicine"),
     ]
 }
@@ -253,17 +253,18 @@ def _make_shocks(rng: np.random.Generator, rules: Rules, stations: list[str]) ->
 def make_world(seed: int = 7, rules: Rules | None = None,
                merchants: tuple[str, ...] = MERCHANT_NAMES) -> World:
     rules = rules or Rules()
-    rng = np.random.default_rng(seed)
     names = list(STATIONS)
-    shocks = _make_shocks(rng, rules, names)
+    # 每个组件用独立的随机流：起始位置、冲击、各市场噪声互不牵连，也不随 t_end 改变
+    shocks = _make_shocks(np.random.default_rng([seed, 1]), rules, names)
 
     n = int(math.ceil(rules.t_end / rules.noise_step)) + 1
     grid = [k * rules.noise_step for k in range(n)]
     schedules: dict[tuple[str, str], EqSchedule] = {}
-    for s in names:
-        for g in STATIONS[s].markets:
+    for i, s in enumerate(names):
+        for j, g in enumerate(STATIONS[s].markets):
             sigma = rules.energy_noise_sigma if g == ENERGY else rules.noise_sigma
-            logm = _ou_log_mults(rng, n, rules.noise_step, sigma, rules.noise_corr)
+            logm = _ou_log_mults(np.random.default_rng([seed, 2, i, j]), n, rules.noise_step,
+                                 sigma, rules.noise_corr)
             mine = [sh for sh in shocks if sh.station == s and sh.good == g]
             cuts = sorted(set(grid) | {sh.t_start for sh in mine} | {sh.t_end for sh in mine})
             times, mults = [], []
@@ -278,7 +279,7 @@ def make_world(seed: int = 7, rules: Rules | None = None,
             schedules[(s, g)] = EqSchedule(tuple(times), tuple(mults))
 
     # 起始星站：按 seed 打乱后依次分配，6 个商人占 7 个星站中的 6 个
-    order = [names[i] for i in rng.permutation(len(names))]
+    order = [names[i] for i in np.random.default_rng([seed, 0]).permutation(len(names))]
     starts = {m: order[i % len(order)] for i, m in enumerate(merchants)}
 
     dist = {(a, b): math.dist(STATIONS[a].pos, STATIONS[b].pos) for a in names for b in names}
