@@ -520,22 +520,22 @@ def _responders(run: Run, sh: dict[str, Any], window: float = RESPONSE_WINDOW) -
     ]
 
 
-def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
-    """一局的"世界线"：每段航程从 (出发时刻, 出发站) 连到 (到港时刻, 目的地)，按商人着色。
-    另挑一次响应最多的短缺冲击，标出它的消息以光速到达各站的时刻，并加粗收到消息后赶去的航程。"""
+def _draw_spacetime(ax: Any, run: Run, front: dict[str, Any] | None) -> None:
+    """在 ax 上画一局的"世界线"：每段航程从 (出发时刻, 出发站) 连到 (到港时刻, 目的地)，按商人着色；
+    front 是一次短缺冲击：标出它的消息到达各站的时刻，并加粗收到消息后运货赶去的航程。"""
     rows = [s for s in ROW_ORDER if s in run.world["stations"]]
     y = {s: i for i, s in enumerate(rows)}
-    fig, ax = plt.subplots(figsize=(12, 4.8))
     label_end: dict[str, float] = {}
     for sh in sorted(run.world["shocks"], key=lambda sh: sh["t_start"]):
         st = sh["station"]
         if st not in y:
             continue
+        hot_band = front is not None and sh == front
         ax.fill_between(
             [sh["t_start"], sh["t_end"]],
             y[st] - 0.32,
             y[st] + 0.32,
-            color="#e1e0d9",
+            color="#cfcdc4" if hot_band else "#e1e0d9",
             lw=0,
             zorder=1,
         )
@@ -545,13 +545,11 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
             text,
             (sh["t_start"] + 0.2, y[st] + (-0.36 if below else 0.36)),
             fontsize=6.5,
-            color=MUTED,
+            color=INK2 if hot_band else MUTED,
             va="top" if below else "bottom",
         )
         if not below:
             label_end[st] = sh["t_start"] + 0.45 * len(text) + 0.5
-    shortages = [sh for sh in run.world["shocks"] if sh["kind"] == "shortage"]
-    front = max(shortages, key=lambda sh: len(_responders(run, sh)), default=None)
     bold = {id(t) for t in _responders(run, front)} if front else set()
     if front:
         a, t0 = front["station"], front["t_start"]
@@ -559,11 +557,18 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
             x = t0 + run.lag(a, st)
             if x <= run.meta["t_end"]:
                 ax.plot([x, x], [y[st] - 0.42, y[st] + 0.42], color=INK, lw=1.4, zorder=5)
-        front_label = f"y{t0:.1f} {a} {front['good']} 短缺的消息" + (
-            "瞬时到达各站" if math.isinf(run.c_info) else "以光速到达各站的时刻"
+        how = "瞬时到达各站" if math.isinf(run.c_info) else "以光速到达各站的时刻"
+        ax.plot(
+            [],
+            [],
+            color=INK,
+            marker="|",
+            ls="none",
+            ms=11,
+            mew=1.6,
+            label=f"y{t0:.1f} {a} {front['good']} 短缺的消息{how}",
         )
-    merchants = list(run.meta["final"])
-    for k, m in enumerate(merchants):
+    for k, m in enumerate(run.meta["final"]):
         color = MERCHANT_COLORS[k % len(MERCHANT_COLORS)]
         trips = [t for t in run.trips if t.merchant == m]
         for t in trips:
@@ -582,11 +587,11 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
                 solid_capstyle="round",
                 zorder=4 if hot else 3,
             )
-        for a, b in zip(trips, trips[1:], strict=False):  # 停靠等待
-            if a.t_arr is not None and b.t_dep - a.t_arr > 0.05:
+        for a_, b_ in zip(trips, trips[1:], strict=False):  # 停靠等待
+            if a_.t_arr is not None and b_.t_dep - a_.t_arr > 0.05:
                 ax.plot(
-                    [a.t_arr, b.t_dep],
-                    [y[a.dest]] * 2,
+                    [a_.t_arr, b_.t_dep],
+                    [y[a_.dest]] * 2,
                     color=color,
                     lw=3,
                     alpha=0.5,
@@ -599,6 +604,17 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
     ax.set_ylim(-0.75, len(rows) - 0.2)
     ax.grid(axis="y", color=GRID, lw=0.8)
     ax.grid(axis="x", visible=False)
+
+
+def _front(run: Run) -> dict[str, Any] | None:
+    """响应最多的那次短缺冲击。"""
+    shortages = [sh for sh in run.world["shocks"] if sh["kind"] == "shortage"]
+    return max(shortages, key=lambda sh: len(_responders(run, sh)), default=None)
+
+
+def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
+    fig, ax = plt.subplots(figsize=(12, 4.8))
+    _draw_spacetime(ax, run, _front(run))
     ax.set_xlabel("银河年（坐标时 t）")
     ax.set_title(
         f"{LABEL.get(run.condition, run.condition)} · 世界 {run.meta['world_seed']} · "
@@ -607,9 +623,42 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
         loc="left",
         fontsize=10,
     )
-    if front:
-        ax.plot([], [], color=INK, marker="|", ls="none", ms=11, mew=1.6, label=front_label)
     ax.legend(ncol=7, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.13))
+    fig.tight_layout()
+    fig.savefig(out / name, dpi=180)
+    plt.close(fig)
+    return name
+
+
+def fig_ghosts(out: Path, top: Run, bottom: Run, name: str = "fig_ghosts.png") -> str | None:
+    """同一个世界的两局上下对照，标同一次冲击（取上面那局响应最多的短缺）。"""
+    front = _front(top)
+    if front is None:
+        return None
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8.4), sharex=True)
+    for ax, run in zip(axes, (top, bottom), strict=True):
+        _draw_spacetime(ax, run, front)
+        n = len(_responders(run, front))
+        ax.set_title(
+            f"{LABEL.get(run.condition, run.condition)} · 重复 {run.meta['replicate']}："
+            f"收到消息后运货赶去 {n} 程（加粗）",
+            loc="left",
+            fontsize=10,
+        )
+    axes[1].set_xlabel("银河年（坐标时 t）")
+    handles, labels = axes[0].get_legend_handles_labels()
+    axes[1].legend(
+        handles, labels, ncol=7, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.16)
+    )
+    fig.suptitle(
+        f"同一个世界、同一场 {front['station']} {front['good']} 短缺（y{front['t_start']:.0f}–"
+        f"y{front['t_end']:.0f}，深灰带）：消息走到各站要 d/c 年，船再飞 d/β 年",
+        x=0.01,
+        ha="left",
+        fontsize=11.5,
+        fontweight="semibold",
+        color=INK,
+    )
     fig.tight_layout()
     fig.savefig(out / name, dpi=180)
     plt.close(fig)
@@ -723,6 +772,18 @@ def write_report(
         next((r for r in runs if r.condition == "greedy-light"), None),
     )
     figs["spacetime"] = fig_spacetime(out, showcase) if showcase is not None else None
+    llm_light = [r for r in runs if r.condition == "llm-light"]
+    greedy_pair = next(
+        (
+            r
+            for r in runs
+            if r.condition == "greedy-light"
+            and llm_light
+            and r.meta["world_seed"] == llm_light[0].meta["world_seed"]
+        ),
+        None,
+    )
+    figs["ghosts"] = fig_ghosts(out, greedy_pair, llm_light[0]) if greedy_pair else None
     conds = [c for c in ORDER if c in summary]
     L: list[str] = []
     L.append("# 相对论星际贸易：实验数据报告")
@@ -773,6 +834,12 @@ def write_report(
             "一局的世界线",
             "spacetime",
             "示例局：每条斜线是一段航程，斜率越陡飞得越快；可以看到航线、" "扎堆和冲击期间的绕行。",
+        ),
+        (
+            "追幽灵：同一场冲击，贪心 vs LLM",
+            "ghosts",
+            "上下两局是同一个世界（冲击和噪声完全相同）。加粗的是收到短缺消息后载着短缺的货赶往冲击站的航程。"
+            "光速下，远方的冲击从发生到船赶到至少 d/c + d/β ≈ 2d 年，往往比冲击本身还长。",
         ),
         ("终局净值", "networth", "推理（LLM vs 贪心）和物理（光速 vs 瞬时 vs 牛顿）各自的效果。"),
         (
