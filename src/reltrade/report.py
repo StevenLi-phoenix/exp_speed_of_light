@@ -30,6 +30,7 @@ from reltrade.analysis import (  # noqa: E402
     LABEL,
     ORDER,
     RESPONSE_WINDOW,
+    WAVE_WINDOW,
     Run,
     audit_precision,
     concepts,
@@ -704,26 +705,38 @@ def _fmt(ms: dict[str, Any], digits: int = 0, pct: bool = False) -> str:
     return f"{ms['mean'] * k:,.{digits}f}{unit}"
 
 
+def _pooled_fmt(p: dict[str, Any], signed: bool = True) -> str:
+    if p.get("mean") is None:
+        return "–"
+    return f"{p['mean']:{'+' if signed else ''}.1f} ± {p['se']:.1f}"
+
+
 def _behavior(L: list[str], conds: list[str], summary: dict[str, Any]) -> None:
     L.append("## 行为")
     L.append("")
     L.append(
         "| 对照组 | 平均航距（ly） | 出发时目的地报价的年龄（年） | 每局等待次数 |"
         " 主货占比 ore / tech / med / 空船 | 每次短缺的追击航程 | 到港时冲击仍在 | 追击航程的意外度 |"
+        " 消息到达后各站多买走的货 | 其中运往冲击站 |"
     )
-    L.append("|---|---|---|---|---|---|---|---|")
+    L.append("|---|---|---|---|---|---|---|---|---|---|")
     for c in conds:
         s = summary[c]
         mix = " / ".join(f"{s['main_share'][g]['mean'] * 100:.0f}%" for g in (*GOODS, "empty"))
         L.append(
             f"| {LABEL[c]} | {_fmt(s['dist_mean'], 1)} | {_fmt(s['info_age_mean'], 1)} | "
             f"{_fmt(s['waits'], 1)} | {mix} | {_fmt(s['chase_per_shock'], 2)} | "
-            f"{_fmt(s['chase_in_time'], 0, True)} | {_fmt(s['chase_surprise'], 2)} |"
+            f"{_fmt(s['chase_in_time'], 0, True)} | {_fmt(s['chase_surprise'], 2)} | "
+            f"{_pooled_fmt(s['wave_extra'])} | {_pooled_fmt(s['wave_to_shock'], signed=False)} |"
         )
     L.append("")
     L.append(
         f"「追击航程」：收到短缺消息后 {RESPONSE_WINDOW:g} 年内，载着短缺的货出发前往冲击站的航程。"
         "光速下，远方的冲击从发生到船赶到至少要 d/c + d/β ≈ 2d 年。"
+        f"「消息到达后各站多买走的货」：短缺消息到达冲击站以外的某站之后 {WAVE_WINDOW:g} 年，"
+        f"同一种货在那里被买走的单位数，减去消息到达之前 {WAVE_WINDOW:g} 年的；"
+        "所有（冲击，站）对合在一起，± 是标准误。远方的冲击只能通过这些买卖改变别处的价格，"
+        "正常库存是 120–400 单位。「其中运往冲击站」是之后那段里同一次停靠就运往冲击站的量。"
     )
     L.append("")
 

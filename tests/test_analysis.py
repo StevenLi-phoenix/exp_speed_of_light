@@ -8,6 +8,7 @@ import pytest
 
 from reltrade.analysis import (
     RESPONSE_WINDOW,
+    WAVE_WINDOW,
     Dock,
     arrival_surprise,
     audit_precision,
@@ -198,6 +199,32 @@ def test_shock_responses_respect_light_cone(runs_dir: Path) -> None:
     # 光速下，追击航程从冲击发生到出发至少隔了消息传过来的 d/c
     for r in chasers:
         assert r["rel_shock"] >= r["distance"] - 1e-9
+
+
+def test_wave_counts_purchases_around_the_news_front(runs_dir: Path) -> None:
+    runs = list(load_runs(runs_dir))
+    per_run = [run_metrics(r) for r in runs]
+    for run, m in zip(runs, per_run, strict=True):
+        assert m["wave"]
+        buys = [r for r in run.records if r["type"] == "trade" and r["side"] == "buy"]
+        for w in m["wave"]:  # 消息到达该站的时刻：光速 t0 + d/c，瞬时信息 t0
+            assert w["front"] == pytest.approx(
+                w["t_shock"] + run.lag(w["shock_station"], w["station"])
+            )
+            q = [
+                (r["t"], r["qty"])
+                for r in buys
+                if r["station"] == w["station"] and r["good"] == w["good"]
+            ]
+            f = w["front"]
+            assert w["pre"] == pytest.approx(sum(x for t, x in q if f - WAVE_WINDOW <= t < f))
+            assert w["post"] == pytest.approx(sum(x for t, x in q if f <= t < f + WAVE_WINDOW))
+            assert 0 <= w["to_shock"] <= w["post"] + 1e-9
+    s = summarize(per_run)
+    for c in s:
+        diffs = [w["post"] - w["pre"] for m in per_run if m["condition"] == c for w in m["wave"]]
+        assert s[c]["wave_extra"]["n"] == len(diffs)
+        assert s[c]["wave_extra"]["mean"] == pytest.approx(sum(diffs) / len(diffs))
 
 
 def test_light_warning_is_d_times_inverse_beta_minus_one(runs_dir: Path) -> None:

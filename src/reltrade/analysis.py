@@ -122,6 +122,7 @@ CONCEPT_LABEL = {
     "cooperate": "与对手合作 / 协调",
 }
 RESPONSE_WINDOW = 8.0  # 收到短缺消息后多少年内载着该货出发前往冲击站，算作"追冲击"
+WAVE_WINDOW = 4.0  # 价格波：短缺消息到达各站之前、之后各看多少年的购买量
 _CONCEPT_RE = {
     k: tuple(tuple(re.compile(p, re.IGNORECASE) for p in alt) for alt in alts)
     for k, alts in CONCEPTS.items()
@@ -525,6 +526,34 @@ def run_metrics(run: Run) -> dict[str, Any]:
     out["chase_per_shock"] = len(chasers) / len(shortages) if shortages else None
     out["chase_in_time"] = sum(r["in_time"] for r in chasers) / len(chasers) if chasers else None
     out["chase_surprise"] = statistics.mean(chase_s) if chase_s else None
+    # 价格波：短缺消息到达冲击站以外的各站之前、之后各 WAVE_WINDOW 年，同种货在那里被买走的量，
+    # 以及之后那段里同一次停靠就运往冲击站的部分。远方的冲击只能通过这些买卖改变别处的价格
+    buys = [r for r in run.records if r["type"] == "trade" and r["side"] == "buy"]
+    dest_of = {(r["merchant"], r["t"]): r["to"] for r in run.records if r["type"] == "depart"}
+    wave = []
+    for sh in shortages:
+        a, g, t0 = sh["station"], sh["good"], sh["t_start"]
+        for s in run.world["stations"]:
+            f = t0 + run.lag(a, s)
+            if s == a or f - WAVE_WINDOW < 0 or f + WAVE_WINDOW > run.meta["t_end"]:
+                continue
+            here = [r for r in buys if r["station"] == s and r["good"] == g]
+            post = [r for r in here if f <= r["t"] < f + WAVE_WINDOW]
+            wave.append(
+                {
+                    "shock_station": a,
+                    "good": g,
+                    "t_shock": t0,
+                    "station": s,
+                    "front": f,
+                    "pre": sum(r["qty"] for r in here if f - WAVE_WINDOW <= r["t"] < f),
+                    "post": sum(r["qty"] for r in post),
+                    "to_shock": sum(
+                        r["qty"] for r in post if dest_of.get((r["merchant"], r["t"])) == a
+                    ),
+                }
+            )
+    out["wave"] = wave
     # 突袭：出发消息到达目的地之后多久，船就到了
     warnings = [
         {
@@ -579,6 +608,14 @@ def run_metrics(run: Run) -> dict[str, Any]:
 # ---------------- 汇总 ----------------
 
 
+def _pooled(xs: list[float]) -> dict[str, float | None]:
+    """把所有局的样本合在一起：均值与标准误。"""
+    if not xs:
+        return {"mean": None, "se": None, "n": 0}
+    se = statistics.stdev(xs) / math.sqrt(len(xs)) if len(xs) > 1 else 0.0
+    return {"mean": statistics.mean(xs), "se": se, "n": len(xs)}
+
+
 def _ms(xs: list[float]) -> dict[str, float | None]:
     xs = [x for x in xs if x is not None]
     if not xs:
@@ -621,6 +658,8 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
             "chase_per_shock": _ms([m["chase_per_shock"] for m in ms]),
             "chase_in_time": _ms([m["chase_in_time"] for m in ms]),
             "chase_surprise": _ms([m["chase_surprise"] for m in ms]),
+            "wave_extra": _pooled([w["post"] - w["pre"] for m in ms for w in m["wave"]]),
+            "wave_to_shock": _pooled([w["to_shock"] for m in ms for w in m["wave"]]),
             "rho_crowd_surprise": _ms([m["rho_crowd_surprise"] for m in ms]),
             "rho_speed_energy": _ms([m["rho_speed_energy"] for m in ms]),
             "port_share": {s: n / total_calls for s, n in port.items()},
