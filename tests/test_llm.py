@@ -281,6 +281,30 @@ def test_client_caches_raw_response_and_replays(
     assert client.cost_usd > 0
 
 
+def test_replayed_response_carries_its_original_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 续跑的局大部分响应来自缓存：整局花费要算上它们当初的花费，重放这个进程本身不花钱
+    msgs = [{"role": "user", "content": "hello"}]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=OK_BODY)
+
+    async def ask(client: LLMClient) -> dict[str, Any]:
+        out = await client.chat(msgs, [], tag="r0")
+        await client.aclose()
+        return out
+
+    first = asyncio.run(ask(make_client(tmp_path, handler, monkeypatch)))
+    replay = make_client(tmp_path, handler, monkeypatch)
+    replay.offline = True
+    again = asyncio.run(ask(replay))
+    assert first["_meta"]["cost_usd"] > 0
+    assert again["_meta"]["cache_hit"] is True
+    assert again["_meta"]["cost_usd"] == pytest.approx(first["_meta"]["cost_usd"])
+    assert replay.cost_usd == 0.0 and replay.usage["cache_hits"] == 1
+
+
 def test_client_retries_then_aborts_on_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

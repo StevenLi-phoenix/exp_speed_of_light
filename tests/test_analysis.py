@@ -10,6 +10,7 @@ from reltrade.analysis import (
     RESPONSE_WINDOW,
     WAVE_WINDOW,
     Dock,
+    Run,
     arrival_surprise,
     audit_precision,
     audit_sample,
@@ -359,6 +360,27 @@ def test_report_renders_reasoning_section(runs_dir: Path, tmp_path: Path) -> Non
     text = (tmp_path / "report.md").read_text()
     assert "## 推理里提到了什么" in text
     assert f"**信息过时 / 光速延迟** · Asel y1.0 @ Sol：{said}" in text
+
+
+def test_resumed_runs_show_no_wall_clock(runs_dir: Path, tmp_path: Path) -> None:
+    # 中途失败、从缓存续跑的局，wall_s 只覆盖最后一次运行
+    base = next(r for r in load_runs(runs_dir) if r.condition == "greedy-light")
+
+    def llm_run(run_id: str, cache_hits: int) -> Run:
+        stats = {"calls": 10, "cache_hits": cache_hits, "cost_usd": 0.5}
+        meta = {**base.meta, "condition": "llm-light", "run_id": run_id}
+        return replace(base, meta={**meta, "wall_s": 600.0, "llm": {"Asel": stats}})
+
+    runs = [llm_run("fresh", 0), llm_run("resumed", 4)]
+    per_run = [run_metrics(r) for r in runs]
+    write_report(tmp_path, runs, per_run, summarize(per_run))
+    rows = {
+        line.split(" | ")[0][2:]: line.split(" | ")
+        for line in (tmp_path / "report.md").read_text().splitlines()
+        if line.startswith(("| fresh |", "| resumed |"))
+    }
+    assert rows["fresh"][8] == "10.0 min" and rows["resumed"][8] == "–（续跑）"
+    assert rows["resumed"][10] == "$0.50 |"
 
 
 @pytest.mark.unit

@@ -969,13 +969,20 @@ def write_report(
     ):
         llm = m.get("llm") or {}
         sm = f"{m['surprise_mean']:.2f}" if m["surprise_mean"] is not None else "–"
+        wall = "–（续跑）" if llm.get("cache_hits") else f"{(m['wall_s'] or 0) / 60:.1f} min"
         L.append(
             f"| {m['run_id']} | {m['net_mean']:,.0f} | {m['net_min']:,.0f} / "
             f"{m['net_max']:,.0f} | {m['trips']} | {m['empty_trips']} | {sm} | "
-            f"{m['messages']} | {m['max_parallel']} | {(m['wall_s'] or 0) / 60:.1f} min | "
+            f"{m['messages']} | {m['max_parallel']} | {wall} | "
             f"{llm.get('calls', '–')} | ${llm.get('cost_usd', 0):.2f} |"
         )
     L.append("")
+    if any((m.get("llm") or {}).get("cache_hits") for m in per_run):
+        L.append(
+            "「续跑」：这一局中途因上游错误中止，之后从缓存逐字节重放到中止处再继续，墙钟只覆盖最后一次"
+            "运行。花费按每个响应当初请求时的价格计，与是否重放无关。"
+        )
+        L.append("")
     # 消息与笔记本摘录
     llm_runs = [(r, m) for r, m in zip(runs, per_run, strict=True) if r.condition.startswith("llm")]
     if llm_runs:

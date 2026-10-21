@@ -107,14 +107,15 @@ class LLMClient:
     def _path(self, key: str) -> Path:
         return self.cache_dir / key[:2] / f"{key}.json.gz"
 
-    def _read_cache(self, path: Path) -> dict[str, Any] | None:
+    def _read_cache(self, path: Path) -> tuple[dict[str, Any], str | None] | None:
+        """返回（解析后的响应，当初请求的时刻）。"""
         if not path.exists():
             return None
         try:
             entry = json.loads(gzip.decompress(path.read_bytes()))
             data = json.loads(entry["raw"])
             data["choices"][0]["message"]
-            return data
+            return data, entry.get("ts")
         except (OSError, ValueError, KeyError, IndexError, TypeError):
             bad = path.with_suffix(".bad")
             path.rename(bad)
@@ -134,10 +135,13 @@ class LLMClient:
         }
         key = cache_key(body, tag)
         path = self._path(key)
-        cached = self._read_cache(path)
-        if cached is not None:
+        hit = self._read_cache(path)
+        if hit is not None:
+            cached, ts = hit
             self.usage["cache_hits"] += 1
-            cached["_meta"] = {"cache_hit": True, "cost_usd": 0.0, "key": key}
+            # 重放不花钱（self.cost_usd 不变），但带上当初的花费：整局花费与是否续跑无关
+            cost = self._price(cached, ts) if ts else 0.0
+            cached["_meta"] = {"cache_hit": True, "cost_usd": cost, "key": key}
             return cached
         if self.offline:
             raise LLMError(f"offline mode: cache miss for {tag} ({key[:12]})")
@@ -222,13 +226,8 @@ class LLMClient:
                 "reasoning_tokens": reasoning,
             }
         )
-        cost = 0.0
-        price = PRICES.get(self.model)
-        if price:
-            ts = datetime.fromisoformat(meta["ts"])
-            p_in, p_cached, p_out = price["peak" if is_peak(ts) else "off"]
-            cost = ((prompt - cached) * p_in + cached * p_cached + out * p_out) / 1e6
-            self.cost_usd += cost
+        cost = self._price(data, meta["ts"])
+        self.cost_usd += cost
         log.debug(
             "llm %s: %.1fs in=%d (cached %d) out=%d (reasoning %d)",
             self.model,
@@ -239,3 +238,15 @@ class LLMClient:
             reasoning,
         )
         return cost
+
+    def _price(self, data: dict[str, Any], ts: str) -> float:
+        """按响应里的 usage 和请求时刻（高峰 / 平时）估算美元花费；价目表里没有的模型记 0。"""
+        price = PRICES.get(self.model)
+        if not price:
+            return 0.0
+        u = data.get("usage") or {}
+        prompt = int(u.get("prompt_tokens") or 0)
+        cached = int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        out = int(u.get("completion_tokens") or 0)
+        p_in, p_cached, p_out = price["peak" if is_peak(datetime.fromisoformat(ts)) else "off"]
+        return ((prompt - cached) * p_in + cached * p_cached + out * p_out) / 1e6
