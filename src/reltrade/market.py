@@ -99,7 +99,8 @@ class StationMarket:
         if q > self.rules.max_trade_fraction * stock + 1e-9:
             raise MarketError(
                 f"{self.spec.name} can supply at most {self.rules.max_trade_fraction * stock:.1f} "
-                f"{good} right now (stock {stock:.1f})")
+                f"{good} right now (stock {stock:.1f})"
+            )
         return buy_cost(self._k[good], stock, q, self.rules.spread)
 
     def quote_sell(self, t: float, good: str, q: float) -> float:
@@ -122,7 +123,8 @@ class StationMarket:
     def _apply(self, t: float, good: str, delta: float) -> None:
         if t < self._times[-1] - 1e-9:
             raise RuntimeError(
-                f"{self.spec.name}: trade at t={t} before last snapshot {self._times[-1]}")
+                f"{self.spec.name}: trade at t={t} before last snapshot {self._times[-1]}"
+            )
         inv = self.inventory_at(t)
         inv[good] += delta
         self._times.append(t)

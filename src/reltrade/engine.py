@@ -140,21 +140,36 @@ class DecisionContext:
 
     def observe(self) -> Observation:
         """本次停靠的完整观察；光锥内新到的事件只给一次（标记已读）。"""
-        events = [e for e in self.engine.events.visible(self.station, self.t, viewer=self.m.name)
-                  if e.id not in self.m.seen and e.actor != self.m.name]
+        events = [
+            e
+            for e in self.engine.events.visible(self.station, self.t, viewer=self.m.name)
+            if e.id not in self.m.seen and e.actor != self.m.name
+        ]
         self.m.seen.update(e.id for e in events)
         notices, self.m.notices = self.m.notices, []
         r = self.world.rules
         return Observation(
-            merchant=self.m.name, t=self.t, tau=self.m.tau, t_end=r.t_end, station=self.station,
-            cash=self.m.cash, cargo={g: q for g, q in self.m.cargo.items() if q > 1e-9},
-            hold_used=self.hold_used(), hold_capacity=r.hold_capacity, mass=self.mass(),
-            local=self.local_board(), remote=self.remote_views(), events=events,
-            notebook=self.m.notebook, notices=notices, first=self.m.decisions == 1,
+            merchant=self.m.name,
+            t=self.t,
+            tau=self.m.tau,
+            t_end=r.t_end,
+            station=self.station,
+            cash=self.m.cash,
+            cargo={g: q for g, q in self.m.cargo.items() if q > 1e-9},
+            hold_used=self.hold_used(),
+            hold_capacity=r.hold_capacity,
+            mass=self.mass(),
+            local=self.local_board(),
+            remote=self.remote_views(),
+            events=events,
+            notebook=self.m.notebook,
+            notices=notices,
+            first=self.m.decisions == 1,
         )
 
-    def trip_costs(self, destination: str, speed: float,
-                   mass: float | None = None) -> tuple[Leg, float, float | None, float]:
+    def trip_costs(
+        self, destination: str, speed: float, mass: float | None = None
+    ) -> tuple[Leg, float, float | None, float]:
         """(航程, 所需能量, 能源总价或 None=本站供不起, 工资)；mass 缺省为当前质量。"""
         try:
             leg = self.engine.kin.leg(self.world.distance(self.station, destination), speed)
@@ -188,8 +203,9 @@ class DecisionContext:
 
     def _check_station(self, name: str) -> str:
         if name not in self.world.stations:
-            raise ActionError(f"unknown station {name!r}; stations: "
-                              f"{', '.join(self.world.station_names)}")
+            raise ActionError(
+                f"unknown station {name!r}; stations: " f"{', '.join(self.world.station_names)}"
+            )
         if name == self.station:
             raise ActionError(f"you are already at {name}")
         return name
@@ -223,8 +239,15 @@ class DecisionContext:
         self.m.cargo[g] = self.m.cargo.get(g, 0.0) + q
         self._event("trade", {"side": "buy", "good": g, "qty": q, "value": cost})
         self._record("trade", side="buy", good=g, qty=q, value=cost)
-        return {"good": g, "qty": q, "cost": cost, "avg": cost / q, "cash": self.m.cash,
-                "hold_used": self.hold_used(), "ask_now": self.local_board().quotes[g].ask}
+        return {
+            "good": g,
+            "qty": q,
+            "cost": cost,
+            "avg": cost / q,
+            "cash": self.m.cash,
+            "hold_used": self.hold_used(),
+            "ask_now": self.local_board().quotes[g].ask,
+        }
 
     def sell(self, good: str, qty: Any) -> dict[str, Any]:
         self._check_open()
@@ -238,8 +261,14 @@ class DecisionContext:
         self.m.cargo[g] = held - q if held - q > 1e-9 else 0.0
         self._event("trade", {"side": "sell", "good": g, "qty": q, "value": revenue})
         self._record("trade", side="sell", good=g, qty=q, value=revenue)
-        return {"good": g, "qty": q, "revenue": revenue, "avg": revenue / q, "cash": self.m.cash,
-                "bid_now": self.local_board().quotes[g].bid}
+        return {
+            "good": g,
+            "qty": q,
+            "revenue": revenue,
+            "avg": revenue / q,
+            "cash": self.m.cash,
+            "bid_now": self.local_board().quotes[g].bid,
+        }
 
     def quote(self, destination: str, speeds: list[Any]) -> list[dict[str, Any]]:
         dest = self._check_station(destination)
@@ -253,16 +282,27 @@ class DecisionContext:
             except (TypeError, ValueError) as e:  # ActionError 是 ValueError 的子类
                 out.append({"speed": raw, "error": str(e)})
                 continue
-            spoil = {g: 0.5 ** (leg.dtau / self.world.goods[g].half_life)
-                     for g, q in self.m.cargo.items()
-                     if q > 1e-9 and self.world.goods[g].half_life}
+            spoil = {
+                g: 0.5 ** (leg.dtau / self.world.goods[g].half_life)
+                for g, q in self.m.cargo.items()
+                if q > 1e-9 and self.world.goods[g].half_life
+            }
             total = None if cost is None else cost + wages
-            out.append({
-                "speed": speed, "dt": leg.dt, "dtau": leg.dtau, "arrival": self.t + leg.dt,
-                "energy_units": units, "energy_cost": cost, "wages": wages, "total": total,
-                "affordable": total is not None and total <= self.m.cash + 1e-9,
-                "survival": spoil, "after_end": self.t + leg.dt > self.world.rules.t_end,
-            })
+            out.append(
+                {
+                    "speed": speed,
+                    "dt": leg.dt,
+                    "dtau": leg.dtau,
+                    "arrival": self.t + leg.dt,
+                    "energy_units": units,
+                    "energy_cost": cost,
+                    "wages": wages,
+                    "total": total,
+                    "affordable": total is not None and total <= self.m.cash + 1e-9,
+                    "survival": spoil,
+                    "after_end": self.t + leg.dt > self.world.rules.t_end,
+                }
+            )
         return out
 
     def depart(self, destination: str, speed: Any, plan: str = "") -> dict[str, Any]:
@@ -274,12 +314,16 @@ class DecisionContext:
             raise ActionError(f"speed must be a number, got {speed!r}") from None
         leg, units, cost, wages = self.trip_costs(dest, speed)
         if cost is None:
-            raise ActionError(f"{self.station} cannot supply {units:.1f} energy units right now "
-                              f"(max {self.engine.markets[self.station].max_buy(self.t, ENERGY):.1f}); "
-                              "fly slower or lighter")
+            raise ActionError(
+                f"{self.station} cannot supply {units:.1f} energy units right now "
+                f"(max {self.engine.markets[self.station].max_buy(self.t, ENERGY):.1f}); "
+                "fly slower or lighter"
+            )
         if cost + wages > self.m.cash + 1e-9:
-            raise ActionError(f"this flight needs {_fmt(cost + wages)}¢ (energy {_fmt(cost)} + "
-                              f"wages {_fmt(wages)}) but you have {_fmt(self.m.cash)}¢")
+            raise ActionError(
+                f"this flight needs {_fmt(cost + wages)}¢ (energy {_fmt(cost)} + "
+                f"wages {_fmt(wages)}) but you have {_fmt(self.m.cash)}¢"
+            )
         perceived = {v.station: v for v in self.remote_views()}[dest]
         energy_ask = self.local_board().quotes[ENERGY].ask
         self.engine.markets[self.station].buy(self.t, ENERGY, units)
@@ -288,19 +332,40 @@ class DecisionContext:
         self.m.transit = Transit(self.station, dest, self.t, self.t + leg.dt, speed, leg.dtau)
         self.m.next_t, self.m.next_station = self.t + leg.dt, dest
         self.outcome = "depart"
-        self._event("depart", {"to": dest, "speed": speed, "eta": self.t + leg.dt,
-                               "cargo": cargo})
+        self._event("depart", {"to": dest, "speed": speed, "eta": self.t + leg.dt, "cargo": cargo})
         self._record(
-            "depart", to=dest, speed=speed, distance=leg.distance, dt=leg.dt, dtau=leg.dtau,
-            eta=self.t + leg.dt, mass=self.mass(), energy_units=units, energy_cost=cost,
-            wages=wages, cargo=cargo, plan=plan, perceived_age=perceived.age,
-            perceived={g: {"bid": q.bid, "stock": q.stock}
-                       for g, q in perceived.board.quotes.items() if g != ENERGY},
+            "depart",
+            to=dest,
+            speed=speed,
+            distance=leg.distance,
+            dt=leg.dt,
+            dtau=leg.dtau,
+            eta=self.t + leg.dt,
+            mass=self.mass(),
+            energy_units=units,
+            energy_cost=cost,
+            wages=wages,
+            cargo=cargo,
+            plan=plan,
+            perceived_age=perceived.age,
+            perceived={
+                g: {"bid": q.bid, "stock": q.stock}
+                for g, q in perceived.board.quotes.items()
+                if g != ENERGY
+            },
             energy_ask=energy_ask,
         )
-        return {"destination": dest, "speed": speed, "arrival": self.t + leg.dt, "dt": leg.dt,
-                "dtau": leg.dtau, "energy_units": units, "energy_cost": cost, "wages": wages,
-                "cash": self.m.cash}
+        return {
+            "destination": dest,
+            "speed": speed,
+            "arrival": self.t + leg.dt,
+            "dt": leg.dt,
+            "dtau": leg.dtau,
+            "energy_units": units,
+            "energy_cost": cost,
+            "wages": wages,
+            "cash": self.m.cash,
+        }
 
     def wait(self, years: Any, reason: str = "", forced: bool = False) -> dict[str, Any]:
         self._check_open()
@@ -320,7 +385,9 @@ class DecisionContext:
         r = self.world.rules
         names = self.world.merchant_names
         if to != "all" and (to not in names or to == self.m.name):
-            raise ActionError(f"'to' must be 'all' or one of {', '.join(n for n in names if n != self.m.name)}")
+            raise ActionError(
+                f"'to' must be 'all' or one of {', '.join(n for n in names if n != self.m.name)}"
+            )
         text = (text or "").strip()
         if not text:
             raise ActionError("empty message")
@@ -351,8 +418,16 @@ class _Slot:
 
 
 class Engine:
-    def __init__(self, world: World, agents: dict[str, Agent], *, c_info: float,
-                 kin: Kinematics, label: str = "run", logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        world: World,
+        agents: dict[str, Agent],
+        *,
+        c_info: float,
+        kin: Kinematics,
+        label: str = "run",
+        logger: logging.Logger | None = None,
+    ) -> None:
         if kin.name == "newtonian" and not math.isinf(c_info):
             # 牛顿运动学下船可以超光速，光速信息的因果结构不再成立
             raise ValueError("newtonian kinematics requires instant information")
@@ -366,17 +441,30 @@ class Engine:
         }
         self.events = EventLog(world.distance, c_info)
         for i, sh in enumerate(world.shocks):
-            data = {"headline": sh.headline, "good": sh.good, "kind": sh.kind,
-                    "factor": sh.factor, "until": sh.t_end}
-            self.events.add(Event(f"{sh.t_start:014.6f}|world|{i}|0", sh.t_start, sh.station,
-                                  "news", data=data))
+            data = {
+                "headline": sh.headline,
+                "good": sh.good,
+                "kind": sh.kind,
+                "factor": sh.factor,
+                "until": sh.t_end,
+            }
+            self.events.add(
+                Event(f"{sh.t_start:014.6f}|world|{i}|0", sh.t_start, sh.station, "news", data=data)
+            )
             if sh.t_end < r.t_end:
-                self.events.add(Event(f"{sh.t_end:014.6f}|world|{i}|1", sh.t_end, sh.station,
-                                      "news_end", data={"headline": sh.end_headline,
-                                                        "good": sh.good}))
+                self.events.add(
+                    Event(
+                        f"{sh.t_end:014.6f}|world|{i}|1",
+                        sh.t_end,
+                        sh.station,
+                        "news_end",
+                        data={"headline": sh.end_headline, "good": sh.good},
+                    )
+                )
         self.merchants = {
-            name: MerchantState(name, start, r.start_cash, {g: 0.0 for g in world.goods},
-                                next_station=start)
+            name: MerchantState(
+                name, start, r.start_cash, {g: 0.0 for g in world.goods}, next_station=start
+            )
             for name, start in world.starts.items()
         }
         self.records: list[dict[str, Any]] = []
@@ -439,10 +527,17 @@ class Engine:
         if m.cash < 0 and not any(q > 1e-9 for q in m.cargo.values()):
             # 欠着船员工资、又没有货可卖：破产退场
             m.next_t = math.inf
-            self.records.append({"type": "bankrupt", "t": t, "merchant": name,
-                                 "station": m.station, "cash": m.cash})
-            self.log.warning("[%s] y%.2f %s is bankrupt at %s (cash %s)", self.label, t, name,
-                        m.station, _fmt(m.cash))
+            self.records.append(
+                {"type": "bankrupt", "t": t, "merchant": name, "station": m.station, "cash": m.cash}
+            )
+            self.log.warning(
+                "[%s] y%.2f %s is bankrupt at %s (cash %s)",
+                self.label,
+                t,
+                name,
+                m.station,
+                _fmt(m.cash),
+            )
             return
         m.decisions += 1
         ctx = DecisionContext(self, m, t)
@@ -450,10 +545,20 @@ class Engine:
         await self.agents[name].decide(ctx)
         if not ctx.done:
             ctx.wait(self.world.rules.default_wait, "(automatic: no decision)", forced=True)
-            m.notices.append(f"You did not end your last turn with depart or wait, so you stayed "
-                             f"docked for {self.world.rules.default_wait:g} year.")
-        self.log.info("[%s] y%.2f %s @ %s: %s cash %s→%s", self.label, t, name, ctx.station,
-                 _summarize(ctx.actions), _fmt(cash0), _fmt(m.cash))
+            m.notices.append(
+                f"You did not end your last turn with depart or wait, so you stayed "
+                f"docked for {self.world.rules.default_wait:g} year."
+            )
+        self.log.info(
+            "[%s] y%.2f %s @ %s: %s cash %s→%s",
+            self.label,
+            t,
+            name,
+            ctx.station,
+            _summarize(ctx.actions),
+            _fmt(cash0),
+            _fmt(m.cash),
+        )
 
     def _spoil(self, m: MerchantState, dtau: float) -> list[str]:
         notes = []
@@ -471,19 +576,38 @@ class Engine:
         m.tau += tr.dtau
         spoiled = self._spoil(m, tr.dtau)
         m.station, m.clock_t, m.transit = tr.destination, tr.t_arr, None
-        msg = (f"Arrived from {tr.origin}: {self.world.distance(tr.origin, tr.destination):.2f} ly "
-               f"at {tr.speed:g}{self.kin.speed_unit} took {tr.t_arr - tr.t_dep:.2f} Galactic years "
-               f"({tr.dtau:.2f} ship years; wages were prepaid).")
+        msg = (
+            f"Arrived from {tr.origin}: {self.world.distance(tr.origin, tr.destination):.2f} ly "
+            f"at {tr.speed:g}{self.kin.speed_unit} took {tr.t_arr - tr.t_dep:.2f} Galactic years "
+            f"({tr.dtau:.2f} ship years; wages were prepaid)."
+        )
         if spoiled:
             msg += " " + "; ".join(spoiled) + "."
         m.notices.append(msg)
         eid = f"{tr.t_arr:014.6f}|{m.name}|{m.decisions + 1}|0"
-        self.events.add(Event(eid, tr.t_arr, tr.destination, "arrive", m.name,
-                              data={"from": tr.origin, "speed": tr.speed}))
-        self.records.append({"type": "arrive", "t": tr.t_arr, "merchant": m.name,
-                             "station": tr.destination, "origin": tr.origin, "speed": tr.speed,
-                             "t_dep": tr.t_dep, "dtau": tr.dtau,
-                             "cargo": {g: q for g, q in m.cargo.items() if q > 1e-9}})
+        self.events.add(
+            Event(
+                eid,
+                tr.t_arr,
+                tr.destination,
+                "arrive",
+                m.name,
+                data={"from": tr.origin, "speed": tr.speed},
+            )
+        )
+        self.records.append(
+            {
+                "type": "arrive",
+                "t": tr.t_arr,
+                "merchant": m.name,
+                "station": tr.destination,
+                "origin": tr.origin,
+                "speed": tr.speed,
+                "t_dep": tr.t_dep,
+                "dtau": tr.dtau,
+                "cargo": {g: q for g, q in m.cargo.items() if q > 1e-9},
+            }
+        )
 
     def _settle_docked(self, m: MerchantState, t: float) -> None:
         dt = t - m.clock_t
@@ -513,9 +637,14 @@ class Engine:
             market = self.markets[where]
             value = sum(market.quote_sell(t_end, g, q) for g, q in m.cargo.items() if q > 1e-9)
             self.final[m.name] = {
-                "net_worth": m.cash + value, "cash": m.cash, "cargo_value": value,
-                "cargo": {g: q for g, q in m.cargo.items() if q > 1e-9}, "where": where,
-                "in_flight": in_flight, "tau": tau_end, "decisions": m.decisions,
+                "net_worth": m.cash + value,
+                "cash": m.cash,
+                "cargo_value": value,
+                "cargo": {g: q for g, q in m.cargo.items() if q > 1e-9},
+                "where": where,
+                "in_flight": in_flight,
+                "tau": tau_end,
+                "decisions": m.decisions,
                 "notebook": m.notebook,
             }
 

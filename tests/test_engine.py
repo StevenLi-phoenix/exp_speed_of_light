@@ -35,8 +35,13 @@ def who_at(station: str, seed: int = 7) -> str:
     return next(m for m, s in make_world(seed).starts.items() if s == station)
 
 
-def engine_with(script_for: dict[str, dict[int, object]], *, c_info: float = LIGHT,
-                t_end: float = 40.0, seed: int = 7) -> tuple[Engine, dict[str, Scripted]]:
+def engine_with(
+    script_for: dict[str, dict[int, object]],
+    *,
+    c_info: float = LIGHT,
+    t_end: float = 40.0,
+    seed: int = 7,
+) -> tuple[Engine, dict[str, Scripted]]:
     w = make_world(seed, Rules(t_end=t_end))
     agents = {n: Scripted(script_for.get(n, {})) for n in w.merchant_names}
     return Engine(w, agents, c_info=c_info, kin=Relativistic()), agents
@@ -62,8 +67,9 @@ def test_departure_is_seen_only_after_light_arrives() -> None:
 
     eng, agents = engine_with({a: {1: go}, b: {k: poll for k in range(1, 30)}})
     asyncio.run(eng.run())
-    seen_at = [o.t for o in agents[b].obs
-               if any(e.kind == "depart" and e.actor == a for e in o.events)]
+    seen_at = [
+        o.t for o in agents[b].obs if any(e.kind == "depart" and e.actor == a for e in o.events)
+    ]
     assert seen_at, "the departure should eventually be seen"
     assert seen_at[0] >= d and seen_at[0] - d < 0.5 + 1e-9
 
@@ -87,12 +93,18 @@ def test_action_validation() -> None:
     errors: list[str] = []
 
     def bad(ctx: DecisionContext) -> None:
-        for f in (lambda: ctx.buy("ore", 1e6), lambda: ctx.buy("gold", 1),
-                  lambda: ctx.buy("tech", -3), lambda: ctx.sell("med", 1),
-                  lambda: ctx.depart("Nowhere", 0.5), lambda: ctx.depart(ctx.station, 0.5),
-                  lambda: ctx.depart("Sol", 1.0), lambda: ctx.wait(100),
-                  lambda: ctx.send_message("Zed", "hi"),
-                  lambda: ctx.send_message(ctx.m.name, "me")):
+        for f in (
+            lambda: ctx.buy("ore", 1e6),
+            lambda: ctx.buy("gold", 1),
+            lambda: ctx.buy("tech", -3),
+            lambda: ctx.sell("med", 1),
+            lambda: ctx.depart("Nowhere", 0.5),
+            lambda: ctx.depart(ctx.station, 0.5),
+            lambda: ctx.depart("Sol", 1.0),
+            lambda: ctx.wait(100),
+            lambda: ctx.send_message("Zed", "hi"),
+            lambda: ctx.send_message(ctx.m.name, "me"),
+        ):
             try:
                 f()
             except ActionError as e:
@@ -167,8 +179,10 @@ class JitteredGreedy(GreedyMerchant):
 def _run_greedy(jitter_seed: int | None, c_info: float, kin=None, speeds=REL_SPEEDS):
     w = make_world(3, Rules(t_end=60.0))
     rng = random.Random(jitter_seed)
-    agents = {n: (JitteredGreedy(rng, speeds) if jitter_seed is not None
-                  else GreedyMerchant(speeds)) for n in w.merchant_names}
+    agents = {
+        n: (JitteredGreedy(rng, speeds) if jitter_seed is not None else GreedyMerchant(speeds))
+        for n in w.merchant_names
+    }
     eng = Engine(w, agents, c_info=c_info, kin=kin or Relativistic())
     asyncio.run(eng.run())
     events = json.dumps([e.to_json() for e in eng.events.all()], sort_keys=True)

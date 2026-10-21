@@ -17,9 +17,13 @@ FLAT = EqSchedule((0.0,), (1.0,))
 
 def make_market(rules: Rules | None = None) -> StationMarket:
     spec = StationSpec(
-        "Test", (0.0, 0.0, 0.0),
-        {"ore": MarketSpec(10.0, 200.0), "med": MarketSpec(30.0, 100.0),
-         ENERGY: MarketSpec(5.0, 1000.0)},
+        "Test",
+        (0.0, 0.0, 0.0),
+        {
+            "ore": MarketSpec(10.0, 200.0),
+            "med": MarketSpec(30.0, 100.0),
+            ENERGY: MarketSpec(5.0, 1000.0),
+        },
         "test station",
     )
     return StationMarket(spec, {g: FLAT for g in spec.markets}, rules or Rules())
@@ -41,7 +45,9 @@ def test_trades_are_path_independent() -> None:
     whole = a.buy(1.0, "ore", 120.0)
     split = b.buy(1.0, "ore", 50.0) + b.buy(1.0, "ore", 70.0)
     assert whole == pytest.approx(split)
-    assert a.sell(1.0, "ore", 30.0) == pytest.approx(b.sell(1.0, "ore", 10.0) + b.sell(1.0, "ore", 20.0))
+    assert a.sell(1.0, "ore", 30.0) == pytest.approx(
+        b.sell(1.0, "ore", 10.0) + b.sell(1.0, "ore", 20.0)
+    )
 
 
 def test_round_trip_loses_the_spread() -> None:

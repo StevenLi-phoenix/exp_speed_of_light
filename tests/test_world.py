@@ -35,7 +35,7 @@ def test_merchants_start_at_distinct_stations() -> None:
 def test_schedules_start_normal_and_apply_shock_factor() -> None:
     w = make_world(7)
     assert w.shocks, "seed 7 should produce shocks"
-    for (s, g), sched in w.schedules.items():
+    for sched in w.schedules.values():
         assert sched.mult_at(0.0) == pytest.approx(1.0)
     for sh in w.shocks:
         sched = w.schedules[(sh.station, sh.good)]
@@ -50,7 +50,7 @@ def test_schedules_start_normal_and_apply_shock_factor() -> None:
 def test_shocks_do_not_overlap_on_same_market() -> None:
     w = make_world(7)
     for i, a in enumerate(w.shocks):
-        for b in w.shocks[i + 1:]:
+        for b in w.shocks[i + 1 :]:
             if a.station == b.station and a.good == b.good:
                 assert a.t_end <= b.t_start or b.t_end <= a.t_start
 

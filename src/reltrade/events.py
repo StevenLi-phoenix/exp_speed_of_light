@@ -30,8 +30,15 @@ class Event:
     data: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
-        return {"id": self.id, "t": self.t, "station": self.station, "kind": self.kind,
-                "actor": self.actor, "audience": self.audience, "data": self.data}
+        return {
+            "id": self.id,
+            "t": self.t,
+            "station": self.station,
+            "kind": self.kind,
+            "actor": self.actor,
+            "audience": self.audience,
+            "data": self.data,
+        }
 
 
 class EventLog:
@@ -50,7 +57,8 @@ class EventLog:
     def visible(self, station: str, t: float, viewer: str | None = None) -> list[Event]:
         """(station, t) 处光锥内、viewer 有权看的全部事件，按 (t, id) 排序。"""
         out = [
-            e for e in self._events
+            e
+            for e in self._events
             if (e.audience is None or e.audience == viewer)
             and reaches(self._distance(e.station, station), self._c, e.t, t)
         ]
