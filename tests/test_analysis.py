@@ -27,7 +27,7 @@ NAMES = ("Asel", "Bram", "Chen", "Dara", "Emre", "Faye")
 def test_concepts_tag_reasoning_text() -> None:
     text = (
         "The Sol quote is 8.3 y old, so by the time I arrive the price may have recovered. "
-        "At 0.99c gamma is 7.09 and med survives 80%. Chen is heading there too. "
+        "At 0.99c gamma is 7.09, so ship time is short and med survives 80%. Chen goes there too. "
         "Energy shortage at Sirius in the news. I could bluff in a broadcast."
     )
     assert concepts(text, "Bram", NAMES) == {
@@ -49,6 +49,34 @@ def test_concepts_tag_reasoning_text() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # 时间膨胀：要「船时」和「γ / 银河时」同句出现，或明说 time dilation
+        ("At 0.99c: 11.04 galactic y but only 1.56 ship y.", {"dilation"}),
+        ("Ship time = d/(βγ) = 1.34 y.", {"dilation"}),
+        ("Time dilation saves wages.", {"dilation"}),
+        ("Energy cost = 2(γ−1) × mass; γ at 0.9 = 2.294.", set()),  # 能量公式里的 γ
+        ("Energy 2(γ-1) × 1.1, ship time 1.3 y.", set()),
+        ("Wages are 20¢ per ship-year.", set()),  # 牛顿组也会这么说
+        ("Med spoils by ship time: half every 3 years.", {"spoil"}),
+        ("Slower = MORE spoilage (longer ship time).", {"spoil"}),  # 牛顿组里也成立
+        ("Faster: 4.3 galactic y, but just 1.3 ship y.", {"dilation"}),
+        # 合作：要和对手或消息同句出现
+        ("The tech route is far better if prices cooperate.", set()),
+        ("Use the triangle Lalande-Wolf-Sol for med and ore, coordinating.", set()),
+        ("Coordinating with rivals could help.", {"cooperate", "rivals"}),
+        ("Maybe send a message to coordinate routes.", {"cooperate"}),
+        # 冲击：港口动态不算新闻冲击
+        ("From news, who is heading to Lalande?", set()),
+        ("Epidemic at Sirius: med bid 120.", {"news"}),
+    ],
+)
+def test_concept_rules_on_audited_false_positives(text: str, expected: set[str]) -> None:
+    assert concepts(text, "Bram", NAMES) == expected
+
+
+@pytest.mark.unit
 def test_excerpt_returns_the_matching_sentence() -> None:
     text = "Sell first. The Wolf data is 4.1 years old, so it may be stale now! Then buy."
     assert excerpt(text, "stale") == "The Wolf data is 4.1 years old, so it may be stale now!"
@@ -67,7 +95,7 @@ def test_load_docks_collects_assistant_text_only(tmp_path: Path) -> None:
             {
                 "role": "assistant",
                 "content": "Going fast.",
-                "reasoning_content": "gamma is large",
+                "reasoning_content": "gamma is large, so ship time is short",
                 "tool_calls": [
                     {"function": {"name": "write_notebook", "arguments": '{"text": "a.\\nb"}'}},
                     {"function": {"name": "depart", "arguments": '{"plan": "beat Chen"}'}},

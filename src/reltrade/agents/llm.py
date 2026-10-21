@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from reltrade.engine import ActionError, DecisionContext
-from reltrade.llm_client import LLMClient
+from reltrade.llm_client import LLMClient, LLMError
 from reltrade.physics import Kinematics
 from reltrade.prompts import render_observation, render_result, system_prompt, tools
 from reltrade.world import ENERGY, World
@@ -75,7 +75,7 @@ class LLMMerchant:
         rounds = 0
         while not ctx.done and rounds < self.max_rounds:
             rounds += 1
-            data = await self.client.chat(self.messages, self.tools, tag=f"{self.tag}/{self.name}")
+            data = await self._chat(start)
             self._account(data)
             choice = data["choices"][0]
             msg = choice["message"]
@@ -121,6 +121,30 @@ class LLMMerchant:
         self._write_transcript(ctx, start, rounds)
         for m in self.messages[start:]:
             m.pop("reasoning_content", None)
+
+    async def _chat(self, start: int) -> dict[str, Any]:
+        tag = f"{self.tag}/{self.name}"
+        try:
+            return await self.client.chat(self.messages, self.tools, tag=tag)
+        except LLMError as e:
+            # 模型某一步没有思考时，响应里没有 reasoning_content；有的上游会因此拒绝同一停靠内
+            # 之后的请求（HTTP 400，时有时无）。只在被拒时给缺字段的 assistant 消息补空串再试一次：
+            # 没被拒的请求体保持原样，已缓存的对话照旧逐字节重放。
+            missing = [
+                m
+                for m in self.messages[start:]
+                if m["role"] == "assistant" and "reasoning_content" not in m
+            ]
+            if "reasoning_content" not in str(e) or not missing:
+                raise
+            for m in missing:
+                m["reasoning_content"] = ""
+            self.log.warning(
+                "%s: upstream wants reasoning_content back; retrying with %d empty one(s)",
+                tag,
+                len(missing),
+            )
+            return await self.client.chat(self.messages, self.tools, tag=tag)
 
     def _account(self, data: dict[str, Any]) -> None:
         meta = data.get("_meta", {})

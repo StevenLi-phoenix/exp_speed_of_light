@@ -29,6 +29,8 @@ from typing import Any
 
 import numpy as np
 
+from reltrade.world import MERCHANT_NAMES
+
 log = logging.getLogger("reltrade.analysis")
 
 GOODS = ("ore", "tech", "med")
@@ -49,41 +51,92 @@ LABEL = {
     "llm-newton": "LLM·牛顿（c→∞）",
 }
 
-# 推理里提到的概念：英文关键词粗筛（模型用英文推理），报告另附原文摘录供人核对。
-# 对手的名字在 concepts() 里另外匹配。
-CONCEPTS: dict[str, str] = {
-    "stale": r"\bstale\b|\boutdated\b|out[- ]of[- ]date|\b\d+(?:\.\d+)?\s?(?:y|yrs?|years?)\s+old\b"
-    r"|\bold\s+(?:data|snapshots?|quotes?|prices?|info\w*|news)\b"
-    r"|light[- ]?(?:speed\s+)?(?:delay|lag)\w*|\b(?:information|data|signal)\s+(?:delay|lag)\w*",
-    "dilation": r"time[- ]dilation|\bdilat\w*|\bgamma\b|γ|\blorentz\b|proper[- ]time",
-    "forecast": r"\bby the time\b|\b(?:will|would|should|may|might|could)\s+(?:have\s+)?"
-    r"(?:already\s+)?(?:recover|rebound|normali[sz]|revert|replenish|rise|fall|drop|climb|change)\w*"
-    r"|mean[- ]revert\w*|\bextrapolat\w*|\bpredict\w*|\banticipat\w*",
-    "rivals": r"\brivals?\b|\bcompetitors?\b|\bcompetition\b|\bcrowd\w*|\bherd\w*|\bthe pack\b",
-    "spoil": r"\bspoil\w*|\bdecay\w*|half[- ]life|\bsurviv\w*|\bperish\w*",
-    "news": r"\bshortages?\b|\bgluts?\b|\bcris[ie]s\b|\bshocks?\b|\bnews\b",
-    "deceive": r"\blies\b|\blie\b|\blying\b|\bbluff\w*|\bdecoy\w*|\bdecei\w*|\bdeception\b"
-    r"|\b(?:dis|mis)information\b"
-    r"|\bmislead\w*\s+(?:\w+\s+)?(?:rivals?|others|them|competitors?|messages?|broadcasts?|info\w*)",
-    "cooperate": r"\bco-?operat\w*|\bcoordinat\w*|\balliance\b|\bcartel\w*|\bcollu\w*"
-    r"|\btruce\b|\bpact\b",
+# 推理里提到的概念：英文关键词粗筛（模型用英文推理），按句匹配。每个概念有若干备选，每个备选是
+# 一组正则，同一句里全部出现才算命中。精度靠人工核对抽样（--audit），报告里附原文摘录。
+# - 时间膨胀：牛顿组也按船时计工资和腐败，单说 ship time 不算；能量公式 2(γ−1) 里的 γ 也不算。
+#   要么明说 time dilation / proper time，要么「船时」与「γ / 银河时」同句出现
+#   （"更快 → 船时更短"在牛顿组也成立，不算）。
+# - 信息过时：瞬时信息组也有少量命中，说的是报价在航行期间变旧，不是光速延迟。
+# - 合作：要和对手或消息同句出现，排除 "if prices cooperate"、协调自己的航线。
+# - 对手：提到任何一个对手的名字也算，在 concepts() 里另外匹配。
+_SHIP_TIME = r"ship[- ]?(?:time|clock|y\b|yrs?\b|years?)|τ"
+_RIVAL_CONTEXT = (
+    r"\brivals?\b|\bcompetitors?\b|\bothers\b|\beveryone\b|\bmessag\w*|\bbroadcast\w*"
+    r"|\bcartel\w*|\bcollu\w*|\b(?:" + "|".join(MERCHANT_NAMES) + r")\b"
+)
+CONCEPTS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "stale": (
+        (
+            r"\bstale\b|\boutdated\b|out[- ]of[- ]date|\b\d+(?:\.\d+)?\s?(?:y|yrs?|years?)\s+old\b"
+            r"|\bold\s+(?:data|snapshots?|quotes?|prices?|info\w*|news)\b"
+            r"|light[- ]?(?:speed\s+)?(?:delay|lag)\w*"
+            r"|\b(?:information|data|signal)\s+(?:delay|lag)\w*",
+        ),
+    ),
+    "dilation": (
+        (r"time[- ]dilation|\bdilat\w*|proper[- ]time",),
+        (_SHIP_TIME, r"(?:γ|\bgamma\b)(?!\s*[−-]\s*1)|\bgalactic\b"),
+    ),
+    "forecast": (
+        (
+            r"\bby the time\b|\b(?:will|would|should|may|might|could)\s+(?:have\s+)?(?:already\s+)?"
+            r"(?:recover|rebound|normali[sz]|revert|replenish|rise|fall|drop|climb|change)\w*"
+            r"|mean[- ]revert\w*|\bextrapolat\w*|\bpredict\w*|\banticipat\w*",
+        ),
+    ),
+    "rivals": (
+        (r"\brivals?\b|\bcompetitors?\b|\bcompetition\b|\bcrowd\w*|\bherd\w*|\bthe pack\b",),
+    ),
+    "spoil": ((r"\bspoil\w*|\bdecay\w*|half[- ]life|\bsurviv\w*|\bperish\w*",),),
+    "news": (
+        (
+            r"\bepidemic\b|\bharvest\b|\bshortages?\b|\bgluts?\b|\bcris[ie]s\b|\breactor\b"
+            r"|\bshocks?\b|returning to normal",
+        ),
+    ),
+    "deceive": (
+        (
+            r"\blies\b|\blie\b|\blying\b|\bbluff\w*|\bdecoy\w*|\bdecei\w*|\bdeception\b"
+            r"|\b(?:dis|mis)information\b"
+            r"|\bmislead\w*\s+(?:\w+\s+)?(?:rivals?|others|them|competitors?|messages?|broadcasts?|info\w*)",
+        ),
+    ),
+    "cooperate": (
+        (
+            r"\bco-?operat\w*|\bcoordinat\w*|\balliance\b|\bcartel\w*|\bcollu\w*|\btruce\b|\bpact\b",
+            _RIVAL_CONTEXT,
+        ),
+    ),
 }
 CONCEPT_LABEL = {
     "stale": "信息过时 / 光速延迟",
-    "dilation": "时间膨胀（γ、固有时）",
+    "dilation": "时间膨胀（船时 vs 银河时）",
     "forecast": "预测到港时的行情",
-    "rivals": "对手的动向",
+    "rivals": "对手",
     "spoil": "药品腐败",
-    "news": "新闻与冲击",
+    "news": "冲击（短缺 / 过剩 / 危机）",
     "deceive": "欺骗 / 虚张声势",
-    "cooperate": "合作 / 协调",
+    "cooperate": "与对手合作 / 协调",
 }
-_CONCEPT_RE = {k: re.compile(v, re.IGNORECASE) for k, v in CONCEPTS.items()}
+_CONCEPT_RE = {
+    k: tuple(tuple(re.compile(p, re.IGNORECASE) for p in alt) for alt in alts)
+    for k, alts in CONCEPTS.items()
+}
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _sentences(text: str) -> list[str]:
+    return [s for s in _SENTENCE.split(text) if s.strip()]
+
+
+def _hit(concept: str, sentence: str) -> bool:
+    return any(all(rx.search(sentence) for rx in alt) for alt in _CONCEPT_RE[concept])
 
 
 def concepts(text: str, me: str, merchants: Iterable[str]) -> set[str]:
     """一段推理文字提到了哪些概念；提到任何一个对手的名字也算 rivals。"""
-    found = {k for k, rx in _CONCEPT_RE.items() if rx.search(text)}
+    sentences = _sentences(text)
+    found = {k for k in CONCEPTS if any(_hit(k, s) for s in sentences)}
     if any(re.search(rf"\b{re.escape(n)}\b", text) for n in merchants if n != me):
         found.add("rivals")
     return found
@@ -91,9 +144,8 @@ def concepts(text: str, me: str, merchants: Iterable[str]) -> set[str]:
 
 def excerpt(text: str, concept: str, limit: int = 280) -> str | None:
     """含该概念第一次出现的那一句（按句号/换行切）；没有则 None。"""
-    rx = _CONCEPT_RE[concept]
-    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
-        if rx.search(sentence):
+    for sentence in _sentences(text):
+        if _hit(concept, sentence):
             s = sentence.strip(" -*•")
             return s if len(s) <= limit else s[: limit - 1] + "…"
     return None

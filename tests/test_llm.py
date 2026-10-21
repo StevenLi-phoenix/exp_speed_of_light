@@ -9,7 +9,7 @@ import pytest
 
 from reltrade.agents.llm import NUDGE, LLMMerchant
 from reltrade.engine import Engine
-from reltrade.llm_client import AuthError, LLMClient
+from reltrade.llm_client import AuthError, LLMClient, LLMError
 from reltrade.physics import LIGHT, Relativistic
 from reltrade.prompts import render_observation, system_prompt, tools
 from reltrade.world import Rules, make_world
@@ -58,11 +58,15 @@ class FakeClient:
 
 
 def run_single(
-    replies: list[dict[str, Any]], tmp_path: Path, t_end: float = 3.0, max_rounds: int = 8
+    replies: list[dict[str, Any]],
+    tmp_path: Path,
+    t_end: float = 3.0,
+    max_rounds: int = 8,
+    client_cls: type[FakeClient] = FakeClient,
 ) -> tuple[Engine, LLMMerchant, FakeClient]:
     w = make_world(7, Rules(t_end=t_end))
     name = next(m for m, s in w.starts.items() if s == "Sol")
-    client = FakeClient(replies)
+    client = client_cls(replies)
     kin = Relativistic()
 
     class Idle:
@@ -120,6 +124,49 @@ def test_tool_calls_execute_in_order_and_reasoning_is_stripped(tmp_path: Path) -
     assert agent.stats["tool_errors"] == 1
     assert eng.merchants[agent.name].notebook == "tech run"
     assert eng.merchants[agent.name].transit is not None
+
+
+class PickyUpstream(FakeClient):
+    """模拟严格的上游：同一停靠内有 assistant 消息没带 reasoning_content 就拒绝（HTTP 400）。"""
+
+    rejections = 0
+
+    async def chat(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], tag: str
+    ) -> dict[str, Any]:
+        last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
+        dock = messages[last_user:]
+        if any(m["role"] == "assistant" and "reasoning_content" not in m for m in dock):
+            self.rejections += 1
+            raise LLMError(
+                "HTTP 400 for test: Upstream request failed: [invalid_request_error] The "
+                "`reasoning_content` in the thinking mode must be passed back to the API."
+            )
+        return await super().chat(messages, tools, tag)
+
+
+def test_rejected_missing_reasoning_is_backfilled_and_retried(tmp_path: Path) -> None:
+    replies = [
+        reply(call("a", "quote_trip", destination="Wolf 359", speeds=[0.9]), reasoning="hmm"),
+        reply(call("b", "buy", good="tech", quantity=5)),  # 这一步模型没有思考：响应里没有该字段
+        reply(call("c", "wait", years=19, reason="done"), reasoning="ok"),
+    ]
+    _, agent, client = run_single(replies, tmp_path, client_cls=PickyUpstream)
+    assert client.rejections == 1
+    # 被拒后只给缺字段的那条补空串，其余消息原样重发
+    retry = client.requests[2]  # 第 3 次请求被拒后重发的那次
+    assistants = [m for m in retry if m["role"] == "assistant"]
+    assert [m["reasoning_content"] for m in assistants] == ["hmm", ""]
+    assert all("reasoning_content" not in m for m in agent.messages)  # 停靠结束照常剥掉
+
+
+def test_other_llm_errors_still_propagate(tmp_path: Path) -> None:
+    class Broken(FakeClient):
+        async def chat(self, *a: Any, **k: Any) -> dict[str, Any]:
+            raise LLMError("HTTP 400 for test: context length exceeded")
+
+    with pytest.raises(LLMError, match="context length"):
+        run_single([], tmp_path, client_cls=Broken)
 
 
 def test_text_only_reply_gets_nudged(tmp_path: Path) -> None:
