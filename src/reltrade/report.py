@@ -235,7 +235,7 @@ def fig_surprise(out: Path, per_run: list[dict[str, Any]]) -> str:
         a1.plot([i - 0.32, i + 0.32], [med, med], color=INK, lw=2, solid_capstyle="round", zorder=4)
     a1.axhline(1.0, color=BASE, lw=1, zorder=1)
     a1.set_xticks(range(len(conds)), [LABEL[c] for c in conds], rotation=15, ha="right")
-    a1.set_ylabel("实际收入 ÷ 出发时预期")
+    a1.set_ylabel("到港时可得收入 ÷ 出发时预期")
     a1.set_ylim(0, 2.2)
     a1.set_title("到港卖货的意外度（1 = 与出发时看到的报价一致）", loc="left")
     for c in conds:
@@ -677,9 +677,9 @@ def write_report(
     L.append("")
     L.append(
         "| 对照组 | 局数（世界） | 每局商人均净值 | 基尼 | 每局航程 | ore / tech / med 中位速度 |"
-        " 意外度均值 | 意外度<0.8 | 预警<0.5 年 | 每局消息 | 平均船时 τ | 破产 | LLM 花费 |"
+        " 意外度均值 | 意外度<0.8 | 到港没卖主货 | 预警<0.5 年 | 每局消息 | 平均船时 τ | 破产 | LLM 花费 |"
     )
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for c in conds:
         s = summary[c]
         sp = s["speed_by_good"]
@@ -692,13 +692,16 @@ def write_report(
             f"| {LABEL[c]} | {s['runs']}（{','.join(map(str, s['worlds']))}） | "
             f"{_fmt(s['net_mean'])} | {_fmt(s['gini'], 2)} | {_fmt(s['trips'], 1)} | "
             f"{speeds} | {_fmt(s['surprise_mean'], 2)} | {_fmt(s['surprise_bad'], 0, True)} | "
+            f"{_fmt(s['unsold_share'], 0, True)} | "
             f"{_fmt(s['raid_share'], 0, True)} | {_fmt(s['messages'], 1)} | "
             f"{_fmt(s['tau_mean'], 1)} | {s['bankrupt']} | ${s['cost_usd']:.2f} |"
         )
     L.append("")
     L.append(
         "「±」是跨局标准差。贪心组多世界 seed，用来估计世界之间的差异；LLM 组同一世界多次重复，"
-        "差异来自采样随机性。"
+        "差异来自采样随机性。意外度 = 到港那一刻按目的地真实报价卖掉主货能得的收入 ÷ 出发时按看到的"
+        "报价算的预期，所有载货航程都算，与到港后卖不卖无关；「到港没卖主货」是到港后没在目的地卖主货"
+        "（带走或囤着）的航程比例。"
     )
     L.append("")
     _behavior(L, conds, summary)
@@ -726,7 +729,8 @@ def write_report(
         (
             "过时报价与扎堆",
             "surprise",
-            "意外度 < 1：到港时价格比出发时看到的差（报价过时、对手先到、冲击结束）。",
+            "意外度 < 1：到港时目的地的真实报价比出发时看到的差（报价过时、对手先到、冲击结束）。"
+            "按到港时刻的真实报价算，与到港后卖不卖无关。",
         ),
         (
             "信息波：冲击响应",

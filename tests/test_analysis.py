@@ -8,10 +8,12 @@ import pytest
 
 from reltrade.analysis import (
     Dock,
+    arrival_surprise,
     concepts,
     excerpt,
     load_docks,
     load_runs,
+    rebuild_markets,
     run_metrics,
     summarize,
 )
@@ -139,6 +141,35 @@ def test_trips_link_departures_arrivals_and_sales(runs_dir: Path) -> None:
         p = t.perceived[t.main]
         expected = p["bid"] * p["stock"] * math.log1p(q / p["stock"])
         assert t.surprise(t.main) == pytest.approx(revenue / expected)
+
+
+def test_arrival_surprise_equals_realized_when_sold_on_arrival(runs_dir: Path) -> None:
+    """贪心到港即卖光：只要同一时刻没有别人在该站成交，按到港报价算的意外度就等于实际意外度。"""
+    run = next(r for r in load_runs(runs_dir) if r.condition == "greedy-light")
+    markets = rebuild_markets(run)
+    traders: dict[tuple[str, float], set[str]] = {}
+    for r in run.records:
+        if r["type"] == "trade":
+            traders.setdefault((r["station"], r["t"]), set()).add(r["merchant"])
+    checked = 0
+    for t in run.trips:
+        if t.t_arr is None or t.main == "empty" or t.main not in t.sold:
+            continue
+        sold_q, _ = t.sold[t.main]
+        if abs(sold_q - t.arrived[t.main]) > 1e-9 or traders[(t.dest, t.t_arr)] != {t.merchant}:
+            continue
+        assert arrival_surprise(t, markets) == pytest.approx(t.surprise(t.main), rel=1e-9)
+        checked += 1
+    assert checked > 20
+    m = run_metrics(run)
+    assert m["unsold_share"] == 0.0  # 贪心总是卖光
+
+
+def test_rebuild_refuses_a_changed_world(runs_dir: Path) -> None:
+    run = load_runs(runs_dir)[0]
+    run.world["shocks"] = run.world["shocks"][1:]
+    with pytest.raises(ValueError, match="world generator changed"):
+        rebuild_markets(run)
 
 
 def test_shock_responses_respect_light_cone(runs_dir: Path) -> None:

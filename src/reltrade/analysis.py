@@ -23,13 +23,14 @@ import re
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from reltrade.world import MERCHANT_NAMES
+from reltrade.market import StationMarket, sell_revenue_from_quote
+from reltrade.world import MERCHANT_NAMES, Rules, make_world
 
 log = logging.getLogger("reltrade.analysis")
 
@@ -314,6 +315,39 @@ def load_runs(root: Path) -> list[Run]:
     return runs
 
 
+def rebuild_markets(run: Run) -> dict[str, StationMarket]:
+    """按 world.json 的 seed 和规则重建世界（先核对冲击列表一致），装回 stations.json 的库存快照，
+    之后可以查任意时刻、任意星站的真实报价。"""
+    raw = run.world["rules"]
+    rules = Rules(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.items()})
+    world = make_world(run.meta["world_seed"], rules)
+    if [asdict(sh) for sh in world.shocks] != run.world["shocks"]:
+        raise ValueError(f"{run.path}: the world generator changed since this run")
+    snaps = json.loads((run.path / "stations.json").read_text())
+    return {
+        s: StationMarket.from_snapshots(
+            spec, {g: world.schedules[(s, g)] for g in spec.markets}, rules, snaps[s]
+        )
+        for s, spec in world.stations.items()
+    }
+
+
+def arrival_surprise(trip: Trip, markets: dict[str, StationMarket]) -> float | None:
+    """到港那一刻（本船成交之前）按目的地真实报价卖掉主货能得的收入 ÷ 按出发时看到的报价算的预期。
+    数量都用到港时（腐败之后）的主货数量。和到港后卖不卖、卖多少无关：只看卖掉的航程会有选择偏差
+    （LLM 到港发现价格差可以不卖，贪心总是卖光）。"""
+    g = trip.main
+    if g == "empty" or trip.t_arr is None:
+        return None
+    q = trip.arrived.get(g, 0.0)
+    p = trip.perceived.get(g) or {}
+    if q <= 1e-6 or not p.get("bid") or not p.get("stock"):
+        return None
+    quote = markets[trip.dest].board_at(trip.t_arr - 1e-9).quotes[g]
+    expected = p["bid"] * p["stock"] * math.log1p(q / p["stock"])
+    return sell_revenue_from_quote(quote, q) / expected
+
+
 # ---------------- 每局指标 ----------------
 
 
@@ -380,11 +414,14 @@ def run_metrics(run: Run) -> dict[str, Any]:
     mains = Counter(t.main for t in run.trips)
     out["main_share"] = {g: mains.get(g, 0) / max(len(run.trips), 1) for g in (*GOODS, "empty")}
     out["dist_mean"] = statistics.mean(t.distance for t in run.trips) if run.trips else None
-    # 意外度与拥挤
+    # 意外度与拥挤：意外度按到港时刻的真实报价算（见 arrival_surprise），所有载货航程都算；
+    # 另记卖掉的那部分的实际意外度，以及到港后没卖主货的比例
+    markets = rebuild_markets(run)
     sells = [r for r in run.records if r["type"] == "trade" and r["side"] == "sell"]
-    surprises, crowd_pairs = [], []
+    surprises, crowd_pairs, realized = [], [], []
+    unsold = 0
     for t in trips:
-        s = t.surprise(t.main) if t.main != "empty" else None
+        s = arrival_surprise(t, markets)
         if s is None:
             continue
         crowd = sum(
@@ -397,11 +434,18 @@ def run_metrics(run: Run) -> dict[str, Any]:
         )
         surprises.append(s)
         crowd_pairs.append((crowd, s))
+        sold = t.surprise(t.main)
+        if sold is None:
+            unsold += 1
+        else:
+            realized.append(sold)
     out["surprise"] = surprises
     out["surprise_mean"] = statistics.mean(surprises) if surprises else None
     out["surprise_bad"] = (
         sum(1 for s in surprises if s < 0.8) / len(surprises) if surprises else None
     )
+    out["realized_surprise_mean"] = statistics.mean(realized) if realized else None
+    out["unsold_share"] = unsold / len(surprises) if surprises else None
     out["crowd_pairs"] = crowd_pairs
     out["rho_crowd_surprise"] = _spearman([c for c, _ in crowd_pairs], [s for _, s in crowd_pairs])
     out["info_age_mean"] = statistics.mean(t.perceived_age for t in run.trips) if run.trips else 0
@@ -436,7 +480,7 @@ def run_metrics(run: Run) -> dict[str, Any]:
         {
             "speed": t.speed,
             "warning": (t.t_arr or 0) - t.t_dep - run.lag(t.origin, t.dest),
-            "surprise": t.surprise(t.main) if t.main != "empty" else None,
+            "surprise": arrival_surprise(t, markets),
         }
         for t in trips
     ]
@@ -520,6 +564,8 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
             "speed_by_good": {g: _ms(v) for g, v in pooled_speed.items()},
             "surprise_mean": _ms([m["surprise_mean"] for m in ms]),
             "surprise_bad": _ms([m["surprise_bad"] for m in ms]),
+            "realized_surprise_mean": _ms([m["realized_surprise_mean"] for m in ms]),
+            "unsold_share": _ms([m["unsold_share"] for m in ms]),
             "rho_crowd_surprise": _ms([m["rho_crowd_surprise"] for m in ms]),
             "rho_speed_energy": _ms([m["rho_speed_energy"] for m in ms]),
             "port_share": {s: n / total_calls for s, n in port.items()},

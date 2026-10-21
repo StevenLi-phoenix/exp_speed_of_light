@@ -102,3 +102,16 @@ def test_trades_at_time_zero_are_invisible_to_negative_retarded_times() -> None:
     m.buy(0.0, "ore", 50.0)
     assert m.board_at(-3.0).quotes == initial  # 远方在 t=0 看到的是开局前的状态
     assert m.board_at(0.0).quotes["ore"].stock == pytest.approx(150.0)
+
+
+def test_market_rebuilt_from_snapshots_quotes_the_same() -> None:
+    m = make_market()
+    m.buy(1.0, "ore", 50.0)
+    m.sell(3.5, "med", 20.0)
+    m.buy(3.5, "ore", 10.0)
+    snaps = [(t, dict(inv)) for t, inv in m.snapshots()]
+    r = StationMarket.from_snapshots(m.spec, m._sched, m.rules, snaps)
+    for t in (-1.0, 0.0, 0.99, 1.0, 2.0, 3.5, 7.0):
+        assert r.board_at(t) == m.board_at(t)
+    with pytest.raises(ValueError, match="no snapshots"):
+        StationMarket.from_snapshots(m.spec, m._sched, m.rules, [])

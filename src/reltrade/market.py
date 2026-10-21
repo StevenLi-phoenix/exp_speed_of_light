@@ -63,6 +63,22 @@ class StationMarket:
         self._times: list[float] = [0.0]
         self._invs: list[dict[str, float]] = [init]
 
+    @classmethod
+    def from_snapshots(
+        cls,
+        spec: StationSpec,
+        schedules: dict[str, EqSchedule],
+        rules: Rules,
+        snapshots: list[tuple[float, dict[str, float]]],
+    ) -> StationMarket:
+        """用一局存下的库存快照（snapshots() 的输出）重建市场，供事后查任意时刻的真实报价。"""
+        if not snapshots:
+            raise ValueError(f"{spec.name}: no snapshots")
+        m = cls(spec, schedules, rules)
+        m._times = [float(t) for t, _ in snapshots]
+        m._invs = [dict(inv) for _, inv in snapshots]
+        return m
+
     # ---- 状态查询 ----
     def inventory_at(self, t: float) -> dict[str, float]:
         if t < 0.0:
