@@ -102,6 +102,11 @@ def _conds(per_run: list[dict[str, Any]]) -> list[str]:
     return [c for c in ORDER if c in present]
 
 
+def _kilo(v: float, _: Any = None) -> str:
+    """坐标轴刻度：2500 → 2.5k（matplotlib FuncFormatter 的签名）。"""
+    return f"{v / 1000:g}k"
+
+
 def _jitter(n: int, width: float = 0.28, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).uniform(-width, width, n)
 
@@ -138,7 +143,7 @@ def fig_networth(out: Path, per_run: list[dict[str, Any]]) -> str:
     ax.annotate("起始 2,000¢", (-0.45, 2000), va="bottom", ha="left", fontsize=8.5, color=MUTED)
     ax.set_xticks(range(len(conds)), labels)
     ax.set_ylabel("终局净值（¢）")
-    ax.yaxis.set_major_formatter(lambda v, _: f"{v / 1000:.0f}k")
+    ax.yaxis.set_major_formatter(_kilo)
     ax.set_title(
         "每个商人的终局净值（点）与组均值（实线）。竖线和虚线：去掉跨终局的最后一程后的净值"
         "与组均值（括号）",

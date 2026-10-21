@@ -27,7 +27,7 @@ from reltrade.analysis import (
 )
 from reltrade.engine import DecisionContext
 from reltrade.experiment import run_one
-from reltrade.report import _plane, fig_ghosts, write_report
+from reltrade.report import _kilo, _plane, fig_ghosts, write_report
 from reltrade.world import make_world
 
 pytestmark = pytest.mark.integration
@@ -347,6 +347,18 @@ def test_ghost_figure_stacks_runs_on_the_same_shock(runs_dir: Path, tmp_path: Pa
     assert name == "fig_ghosts.png" and (tmp_path / name).stat().st_size > 50_000
     whole = fig_ghosts(tmp_path, [*pair, runs["greedy-light"]], name="whole.png", window=None)
     assert whole == "whole.png" and (tmp_path / whole).stat().st_size > 50_000
+
+
+@pytest.mark.unit
+def test_kilo_ticks_keep_half_thousands() -> None:
+    # 刻度在 2.5k 时，旧格式 .0f 会标成「2k」，和起始 2,000¢ 的基线对不上
+    assert [_kilo(v) for v in (0, 2500, 7500, 10000, -2500)] == [
+        "0k",
+        "2.5k",
+        "7.5k",
+        "10k",
+        "-2.5k",
+    ]
 
 
 @pytest.mark.unit
