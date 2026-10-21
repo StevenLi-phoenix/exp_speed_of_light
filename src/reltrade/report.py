@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import statistics
 from collections import defaultdict
 from datetime import datetime
@@ -24,6 +25,7 @@ from reltrade.analysis import (  # noqa: E402
     GOODS,
     LABEL,
     ORDER,
+    RESPONSE_WINDOW,
     Run,
     audit_precision,
     concepts,
@@ -506,28 +508,60 @@ ROW_ORDER = [
 ]  # 相邻行在空间上也相邻
 
 
+def _responders(run: Run, sh: dict[str, Any], window: float = RESPONSE_WINDOW) -> list[Any]:
+    """收到某次短缺冲击的消息之后 window 年内，载着该货出发前往冲击站的航程（同 analysis 的定义）。"""
+    a, g, t0 = sh["station"], sh["good"], sh["t_start"]
+    return [
+        t
+        for t in run.trips
+        if t.dest == a
+        and t.cargo.get(g, 0) > 1e-6
+        and 0 <= t.t_dep - (t0 + run.lag(t.origin, a)) <= window
+    ]
+
+
 def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
-    """一局的"世界线"：每段航程从 (出发时刻, 出发站) 连到 (到港时刻, 目的地)，按商人着色。"""
+    """一局的"世界线"：每段航程从 (出发时刻, 出发站) 连到 (到港时刻, 目的地)，按商人着色。
+    另挑一次响应最多的短缺冲击，标出它的消息以光速到达各站的时刻，并加粗收到消息后赶去的航程。"""
     rows = [s for s in ROW_ORDER if s in run.world["stations"]]
     y = {s: i for i, s in enumerate(rows)}
-    fig, ax = plt.subplots(figsize=(12, 4.6))
-    for sh in run.world["shocks"]:
-        if sh["station"] in y:
-            ax.fill_between(
-                [sh["t_start"], sh["t_end"]],
-                y[sh["station"]] - 0.32,
-                y[sh["station"]] + 0.32,
-                color="#e1e0d9",
-                lw=0,
-                zorder=1,
-            )
-            ax.annotate(
-                f"{sh['good']} {sh['kind']}",
-                (sh["t_start"] + 0.2, y[sh["station"]] + 0.36),
-                fontsize=6.5,
-                color=MUTED,
-                va="bottom",
-            )
+    fig, ax = plt.subplots(figsize=(12, 4.8))
+    label_end: dict[str, float] = {}
+    for sh in sorted(run.world["shocks"], key=lambda sh: sh["t_start"]):
+        st = sh["station"]
+        if st not in y:
+            continue
+        ax.fill_between(
+            [sh["t_start"], sh["t_end"]],
+            y[st] - 0.32,
+            y[st] + 0.32,
+            color="#e1e0d9",
+            lw=0,
+            zorder=1,
+        )
+        text = f"{sh['good']} {sh['kind']}"
+        below = sh["t_start"] < label_end.get(st, -1.0)  # 和同一行上一条标签重叠就放到灰带下方
+        ax.annotate(
+            text,
+            (sh["t_start"] + 0.2, y[st] + (-0.36 if below else 0.36)),
+            fontsize=6.5,
+            color=MUTED,
+            va="top" if below else "bottom",
+        )
+        if not below:
+            label_end[st] = sh["t_start"] + 0.45 * len(text) + 0.5
+    shortages = [sh for sh in run.world["shocks"] if sh["kind"] == "shortage"]
+    front = max(shortages, key=lambda sh: len(_responders(run, sh)), default=None)
+    bold = {id(t) for t in _responders(run, front)} if front else set()
+    if front:
+        a, t0 = front["station"], front["t_start"]
+        for st in rows:
+            x = t0 + run.lag(a, st)
+            if x <= run.meta["t_end"]:
+                ax.plot([x, x], [y[st] - 0.42, y[st] + 0.42], color=INK, lw=1.4, zorder=5)
+        front_label = f"y{t0:.1f} {a} {front['good']} 短缺的消息" + (
+            "瞬时到达各站" if math.isinf(run.c_info) else "以光速到达各站的时刻"
+        )
     merchants = list(run.meta["final"])
     for k, m in enumerate(merchants):
         color = MERCHANT_COLORS[k % len(MERCHANT_COLORS)]
@@ -538,14 +572,15 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
                 if t.t_arr is not None
                 else min(t.t_dep + t.distance / t.speed, run.meta["t_end"])
             )
+            hot = id(t) in bold
             ax.plot(
                 [t.t_dep, t_arr],
                 [y[t.origin], y[t.dest]],
                 color=color,
-                lw=1.3,
-                alpha=0.85,
+                lw=3.0 if hot else 1.2,
+                alpha=1.0 if hot else 0.75,
                 solid_capstyle="round",
-                zorder=3,
+                zorder=4 if hot else 3,
             )
         for a, b in zip(trips, trips[1:], strict=False):  # 停靠等待
             if a.t_arr is not None and b.t_dep - a.t_arr > 0.05:
@@ -561,17 +596,20 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
         ax.plot([], [], color=color, lw=2, label=m)
     ax.set_yticks(range(len(rows)), rows)
     ax.set_xlim(0, run.meta["t_end"])
-    ax.set_ylim(-0.6, len(rows) - 0.3)
+    ax.set_ylim(-0.75, len(rows) - 0.2)
     ax.grid(axis="y", color=GRID, lw=0.8)
     ax.grid(axis="x", visible=False)
     ax.set_xlabel("银河年（坐标时 t）")
     ax.set_title(
         f"{LABEL.get(run.condition, run.condition)} · 世界 {run.meta['world_seed']} · "
         f"重复 {run.meta['replicate']}：6 个商人 {run.meta['t_end']:g} 年的航程"
-        "（斜线 = 飞行，粗横线 = 停靠等待，灰带 = 冲击）",
+        "（斜线 = 飞行，粗横线 = 停靠等待，灰带 = 冲击，加粗 = 收到短缺消息后运货赶去）",
         loc="left",
+        fontsize=10,
     )
-    ax.legend(ncol=6, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.13))
+    if front:
+        ax.plot([], [], color=INK, marker="|", ls="none", ms=11, mew=1.6, label=front_label)
+    ax.legend(ncol=7, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.13))
     fig.tight_layout()
     fig.savefig(out / name, dpi=180)
     plt.close(fig)
@@ -593,16 +631,22 @@ def _behavior(L: list[str], conds: list[str], summary: dict[str, Any]) -> None:
     L.append("")
     L.append(
         "| 对照组 | 平均航距（ly） | 出发时目的地报价的年龄（年） | 每局等待次数 |"
-        " 主货占比 ore / tech / med / 空船 |"
+        " 主货占比 ore / tech / med / 空船 | 每次短缺的追击航程 | 到港时冲击仍在 | 追击航程的意外度 |"
     )
-    L.append("|---|---|---|---|---|")
+    L.append("|---|---|---|---|---|---|---|---|")
     for c in conds:
         s = summary[c]
         mix = " / ".join(f"{s['main_share'][g]['mean'] * 100:.0f}%" for g in (*GOODS, "empty"))
         L.append(
             f"| {LABEL[c]} | {_fmt(s['dist_mean'], 1)} | {_fmt(s['info_age_mean'], 1)} | "
-            f"{_fmt(s['waits'], 1)} | {mix} |"
+            f"{_fmt(s['waits'], 1)} | {mix} | {_fmt(s['chase_per_shock'], 2)} | "
+            f"{_fmt(s['chase_in_time'], 0, True)} | {_fmt(s['chase_surprise'], 2)} |"
         )
+    L.append("")
+    L.append(
+        f"「追击航程」：收到短缺消息后 {RESPONSE_WINDOW:g} 年内，载着短缺的货出发前往冲击站的航程。"
+        "光速下，远方的冲击从发生到船赶到至少要 d/c + d/β ≈ 2d 年。"
+    )
     L.append("")
 
 

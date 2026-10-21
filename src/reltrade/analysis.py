@@ -121,6 +121,7 @@ CONCEPT_LABEL = {
     "deceive": "欺骗 / 虚张声势",
     "cooperate": "与对手合作 / 协调",
 }
+RESPONSE_WINDOW = 8.0  # 收到短缺消息后多少年内载着该货出发前往冲击站，算作"追冲击"
 _CONCEPT_RE = {
     k: tuple(tuple(re.compile(p, re.IGNORECASE) for p in alt) for alt in alts)
     for k, alts in CONCEPTS.items()
@@ -452,11 +453,11 @@ def run_metrics(run: Run) -> dict[str, Any]:
     out["rho_crowd_surprise"] = _spearman([c for c, _ in crowd_pairs], [s for _, s in crowd_pairs])
     out["info_age_mean"] = statistics.mean(t.perceived_age for t in run.trips) if run.trips else 0
     # 冲击响应（事件研究）：短缺冲击 (A, g, t0) × 每个出发站 S，
-    # 记录 S→A 且载有 g 的出发，相对冲击时刻 t0 和相对消息到达 S 的时刻 t0 + d/c 各差多少
+    # 记录 S→A 且载有 g 的出发，相对冲击时刻 t0 和相对消息到达 S 的时刻 t0 + d/c 各差多少；
+    # 收到消息后 RESPONSE_WINDOW 年内出发的算"追冲击"，看到港时冲击是否还在、到港意外度如何
     responses, pairs = [], 0
-    for sh in run.world["shocks"]:
-        if sh["kind"] != "shortage":
-            continue
+    shortages = [sh for sh in run.world["shocks"] if sh["kind"] == "shortage"]
+    for sh in shortages:
         a, g, t0 = sh["station"], sh["good"], sh["t_start"]
         for origin in run.world["stations"]:
             if origin == a:
@@ -473,10 +474,17 @@ def run_metrics(run: Run) -> dict[str, Any]:
                             "distance": run.dist(origin, a),
                             "rel_shock": t.t_dep - t0,
                             "rel_info": t.t_dep - t_info,
+                            "in_time": t.t_arr is not None and t.t_arr <= sh["t_end"],
+                            "surprise": arrival_surprise(t, markets),
                         }
                     )
     out["shock_responses"] = responses
     out["shock_pairs"] = pairs
+    chasers = [r for r in responses if 0 <= r["rel_info"] <= RESPONSE_WINDOW]
+    chase_s = [r["surprise"] for r in chasers if r["surprise"] is not None]
+    out["chase_per_shock"] = len(chasers) / len(shortages) if shortages else None
+    out["chase_in_time"] = sum(r["in_time"] for r in chasers) / len(chasers) if chasers else None
+    out["chase_surprise"] = statistics.mean(chase_s) if chase_s else None
     # 突袭：出发消息到达目的地之后多久，船就到了
     warnings = [
         {
@@ -568,6 +576,9 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
             "surprise_bad": _ms([m["surprise_bad"] for m in ms]),
             "realized_surprise_mean": _ms([m["realized_surprise_mean"] for m in ms]),
             "unsold_share": _ms([m["unsold_share"] for m in ms]),
+            "chase_per_shock": _ms([m["chase_per_shock"] for m in ms]),
+            "chase_in_time": _ms([m["chase_in_time"] for m in ms]),
+            "chase_surprise": _ms([m["chase_surprise"] for m in ms]),
             "rho_crowd_surprise": _ms([m["rho_crowd_surprise"] for m in ms]),
             "rho_speed_energy": _ms([m["rho_speed_energy"] for m in ms]),
             "port_share": {s: n / total_calls for s, n in port.items()},

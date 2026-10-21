@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from reltrade.analysis import (
+    RESPONSE_WINDOW,
     Dock,
     arrival_surprise,
     audit_precision,
@@ -184,6 +185,17 @@ def test_shock_responses_respect_light_cone(runs_dir: Path) -> None:
     inst = run_metrics(runs["greedy-ansible"])
     for resp in inst["shock_responses"]:
         assert resp["rel_info"] == pytest.approx(resp["rel_shock"])
+    # 追冲击：收到消息后 RESPONSE_WINDOW 年内出发的那部分
+    shortages = [sh for sh in runs["greedy-light"].world["shocks"] if sh["kind"] == "shortage"]
+    chasers = [r for r in m["shock_responses"] if 0 <= r["rel_info"] <= RESPONSE_WINDOW]
+    assert m["chase_per_shock"] == pytest.approx(len(chasers) / len(shortages))
+    if chasers:
+        assert m["chase_in_time"] == pytest.approx(
+            sum(r["in_time"] for r in chasers) / len(chasers)
+        )
+    # 光速下，追击航程从冲击发生到出发至少隔了消息传过来的 d/c
+    for r in chasers:
+        assert r["rel_shock"] >= r["distance"] - 1e-9
 
 
 def test_light_warning_is_d_times_inverse_beta_minus_one(runs_dir: Path) -> None:
