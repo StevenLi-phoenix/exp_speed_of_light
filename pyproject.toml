@@ -42,3 +42,4 @@ select = ["E", "F", "W", "B", "UP", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/reltrade/prompts.py" = ["E501"]  # 提示词正文
+"src/reltrade/report.py" = ["E501"]  # 中文报告正文（全角字符按双宽计）

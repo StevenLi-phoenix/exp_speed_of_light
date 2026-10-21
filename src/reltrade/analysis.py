@@ -8,6 +8,7 @@
 - 价格/信息波：短缺冲击后，把该货运往冲击星站的出发，相对冲击时刻的滞后 vs 距离
 - 突袭：预警时间 = 到港时刻 − 出发消息到达目的地的时刻 = d(1/β − 1)（光速信息下）
 - 双生子：终局船时 τ
+- 推理（LLM 组）：每次停靠模型写下的文字里提到了哪些概念（信息过时、时间膨胀、预测、对手……）
 
 用法：python -m reltrade.analysis --runs runs --out reports/<name>
 """
@@ -18,8 +19,10 @@ import argparse
 import json
 import logging
 import math
+import re
 import statistics
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,6 +48,89 @@ LABEL = {
     "llm-ansible": "LLM·瞬时信息",
     "llm-newton": "LLM·牛顿（c→∞）",
 }
+
+# 推理里提到的概念：英文关键词粗筛（模型用英文推理），报告另附原文摘录供人核对。
+# 对手的名字在 concepts() 里另外匹配。
+CONCEPTS: dict[str, str] = {
+    "stale": r"\bstale\b|\boutdated\b|out[- ]of[- ]date|\b\d+(?:\.\d+)?\s?(?:y|yrs?|years?)\s+old\b"
+    r"|\bold\s+(?:data|snapshots?|quotes?|prices?|info\w*|news)\b"
+    r"|light[- ]?(?:speed\s+)?(?:delay|lag)\w*|\b(?:information|data|signal)\s+(?:delay|lag)\w*",
+    "dilation": r"time[- ]dilation|\bdilat\w*|\bgamma\b|γ|\blorentz\b|proper[- ]time",
+    "forecast": r"\bby the time\b|\b(?:will|would|should|may|might|could)\s+(?:have\s+)?"
+    r"(?:already\s+)?(?:recover|rebound|normali[sz]|revert|replenish|rise|fall|drop|climb|change)\w*"
+    r"|mean[- ]revert\w*|\bextrapolat\w*|\bpredict\w*|\banticipat\w*",
+    "rivals": r"\brivals?\b|\bcompetitors?\b|\bcompetition\b|\bcrowd\w*|\bherd\w*|\bthe pack\b",
+    "spoil": r"\bspoil\w*|\bdecay\w*|half[- ]life|\bsurviv\w*|\bperish\w*",
+    "news": r"\bshortages?\b|\bgluts?\b|\bcris[ie]s\b|\bshocks?\b|\bnews\b",
+    "deceive": r"\blies\b|\blie\b|\blying\b|\bbluff\w*|\bdecoy\w*|\bdecei\w*|\bdeception\b"
+    r"|\b(?:dis|mis)information\b"
+    r"|\bmislead\w*\s+(?:\w+\s+)?(?:rivals?|others|them|competitors?|messages?|broadcasts?|info\w*)",
+    "cooperate": r"\bco-?operat\w*|\bcoordinat\w*|\balliance\b|\bcartel\w*|\bcollu\w*"
+    r"|\btruce\b|\bpact\b",
+}
+CONCEPT_LABEL = {
+    "stale": "信息过时 / 光速延迟",
+    "dilation": "时间膨胀（γ、固有时）",
+    "forecast": "预测到港时的行情",
+    "rivals": "对手的动向",
+    "spoil": "药品腐败",
+    "news": "新闻与冲击",
+    "deceive": "欺骗 / 虚张声势",
+    "cooperate": "合作 / 协调",
+}
+_CONCEPT_RE = {k: re.compile(v, re.IGNORECASE) for k, v in CONCEPTS.items()}
+
+
+def concepts(text: str, me: str, merchants: Iterable[str]) -> set[str]:
+    """一段推理文字提到了哪些概念；提到任何一个对手的名字也算 rivals。"""
+    found = {k for k, rx in _CONCEPT_RE.items() if rx.search(text)}
+    if any(re.search(rf"\b{re.escape(n)}\b", text) for n in merchants if n != me):
+        found.add("rivals")
+    return found
+
+
+def excerpt(text: str, concept: str, limit: int = 280) -> str | None:
+    """含该概念第一次出现的那一句（按句号/换行切）；没有则 None。"""
+    rx = _CONCEPT_RE[concept]
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+        if rx.search(sentence):
+            s = sentence.strip(" -*•")
+            return s if len(s) <= limit else s[: limit - 1] + "…"
+    return None
+
+
+@dataclass(frozen=True)
+class Dock:
+    """一次停靠里模型写下的全部文字：推理、正文、工具参数（不含报告和工具结果）。"""
+
+    merchant: str
+    t: float
+    station: str
+    text: str
+
+
+def _args_text(raw: str) -> str:
+    try:
+        args = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    return "\n".join(map(str, args.values())) if isinstance(args, dict) else str(args)
+
+
+def load_docks(run_dir: Path) -> list[Dock]:
+    docks = []
+    for f in sorted((run_dir / "transcripts").glob("*.jsonl")):
+        for d in _read_jsonl(f):
+            parts: list[str] = []
+            for m in d["messages"]:
+                if m.get("role") != "assistant":
+                    continue
+                parts += [m.get("reasoning_content") or "", m.get("content") or ""]
+                parts += [
+                    _args_text(tc["function"]["arguments"]) for tc in m.get("tool_calls") or []
+                ]
+            docks.append(Dock(f.stem, d["t"], d["station"], "\n".join(p for p in parts if p)))
+    return docks
 
 
 @dataclass
@@ -97,6 +183,7 @@ class Run:
     world: dict[str, Any]
     records: list[dict[str, Any]]
     trips: list[Trip]
+    docks: list[Dock] = field(default_factory=list)
 
     @property
     def condition(self) -> str:
@@ -170,7 +257,8 @@ def load_runs(root: Path) -> list[Run]:
         meta = json.loads((d / "result.json").read_text())
         world = json.loads((d / "world.json").read_text())
         records = _read_jsonl(d / "records.jsonl")
-        runs.append(Run(d, meta, world, records, _build_trips(meta["run_id"], records)))
+        trips = _build_trips(meta["run_id"], records)
+        runs.append(Run(d, meta, world, records, trips, load_docks(d)))
     return runs
 
 
@@ -236,6 +324,10 @@ def run_metrics(run: Run) -> dict[str, Any]:
     arrivals = Counter(r["station"] for r in run.records if r["type"] == "arrive")
     out["port_calls"] = {s: arrivals.get(s, 0) for s in run.world["stations"]}
     out["departures"] = dict(Counter(t.origin for t in run.trips))
+    # 行为
+    mains = Counter(t.main for t in run.trips)
+    out["main_share"] = {g: mains.get(g, 0) / max(len(run.trips), 1) for g in (*GOODS, "empty")}
+    out["dist_mean"] = statistics.mean(t.distance for t in run.trips) if run.trips else None
     # 意外度与拥挤
     sells = [r for r in run.records if r["type"] == "trade" and r["side"] == "sell"]
     surprises, crowd_pairs = [], []
@@ -310,6 +402,11 @@ def run_metrics(run: Run) -> dict[str, Any]:
     ]
     out["tau"] = {n: f["tau"] for n, f in final.items()}
     out["net"] = {n: f["net_worth"] for n, f in final.items()}
+    if run.docks:
+        tags = [concepts(d.text, d.merchant, final) for d in run.docks]
+        out["docks"] = len(tags)
+        out["concepts"] = {k: sum(k in t for t in tags) / len(tags) for k in CONCEPTS}
+        out["reasoning_chars"] = statistics.mean(len(d.text) for d in run.docks)
     llm = run.meta.get("llm") or {}
     if llm:
         out["llm"] = {
@@ -357,10 +454,11 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
         for m in ms:
             for g, v in m["speed_by_good"].items():
                 pooled_speed[g].append(v)
-        port = Counter()
+        port: Counter[str] = Counter()
         for m in ms:
             port.update(m["port_calls"])
         total_calls = sum(port.values()) or 1
+        with_docks = [m for m in ms if "concepts" in m]
         out[c] = {
             "runs": len(ms),
             "worlds": sorted({m["world_seed"] for m in ms}),
@@ -378,6 +476,15 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
             "tau_mean": _ms([m["tau_mean"] for m in ms]),
             "bankrupt": sum(m["bankrupt"] for m in ms),
             "cost_usd": sum((m.get("llm") or {}).get("cost_usd", 0.0) for m in ms),
+            "dist_mean": _ms([m["dist_mean"] for m in ms]),
+            "info_age_mean": _ms([m["info_age_mean"] for m in ms]),
+            "waits": _ms([m["waits"] for m in ms]),
+            "main_share": {g: _ms([m["main_share"][g] for m in ms]) for g in (*GOODS, "empty")},
+            "concepts": (
+                {k: _ms([m["concepts"][k] for m in with_docks]) for k in CONCEPTS}
+                if with_docks
+                else {}
+            ),
         }
     return out
 

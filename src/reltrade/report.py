@@ -19,7 +19,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from reltrade.analysis import GOODS, LABEL, ORDER, Run  # noqa: E402
+from reltrade.analysis import (  # noqa: E402
+    CONCEPT_LABEL,
+    GOODS,
+    LABEL,
+    ORDER,
+    Run,
+    concepts,
+    excerpt,
+)
 
 SURFACE, INK, INK2, MUTED, GRID, BASE = (
     "#fcfcfb",
@@ -480,6 +488,64 @@ def _fmt(ms: dict[str, Any], digits: int = 0, pct: bool = False) -> str:
     return f"{ms['mean'] * k:,.{digits}f}{unit}"
 
 
+def _behavior(L: list[str], conds: list[str], summary: dict[str, Any]) -> None:
+    L.append("## 行为")
+    L.append("")
+    L.append(
+        "| 对照组 | 平均航距（ly） | 出发时目的地报价的年龄（年） | 每局等待次数 |"
+        " 主货占比 ore / tech / med / 空船 |"
+    )
+    L.append("|---|---|---|---|---|")
+    for c in conds:
+        s = summary[c]
+        mix = " / ".join(f"{s['main_share'][g]['mean'] * 100:.0f}%" for g in (*GOODS, "empty"))
+        L.append(
+            f"| {LABEL[c]} | {_fmt(s['dist_mean'], 1)} | {_fmt(s['info_age_mean'], 1)} | "
+            f"{_fmt(s['waits'], 1)} | {mix} |"
+        )
+    L.append("")
+
+
+def _reasoning(
+    L: list[str], conds: list[str], summary: dict[str, Any], showcase: Run | None
+) -> None:
+    llm_conds = [c for c in conds if summary[c]["concepts"]]
+    if not llm_conds:
+        return
+    L.append("## 推理里提到了什么")
+    L.append("")
+    L.append(
+        "每次停靠，模型写下的全部文字（推理 + 正文 + 工具参数）里是否出现某个概念的关键词，"
+        "按停靠次数计百分比。关键词是粗筛：瞬时信息组和牛顿组的「信息过时」、牛顿组的「时间膨胀」"
+        "本应为 0，它们的实际值可以当作误报率的参照。"
+    )
+    L.append("")
+    L.append("| 概念 | " + " | ".join(LABEL[c] for c in llm_conds) + " |")
+    L.append("|---|" + "---|" * len(llm_conds))
+    for k, label in CONCEPT_LABEL.items():
+        cells = " | ".join(_fmt(summary[c]["concepts"][k], 0, True) for c in llm_conds)
+        L.append(f"| {label} | {cells} |")
+    L.append("")
+    if showcase is None or not showcase.docks:
+        return
+    L.append(f"原文摘录（{showcase.meta['run_id']}，每个概念取最早提到它的两位商人）：")
+    L.append("")
+    names = list(showcase.meta["final"])
+    for k, label in CONCEPT_LABEL.items():
+        seen: set[str] = set()
+        for d in sorted(showcase.docks, key=lambda d: (d.t, d.merchant)):
+            if d.merchant in seen or k not in concepts(d.text, d.merchant, names):
+                continue
+            ex = excerpt(d.text, k)
+            if ex is None:  # 只因提到对手的名字而命中，没有可摘的关键词句
+                continue
+            seen.add(d.merchant)
+            L.append(f"- **{label}** · {d.merchant} y{d.t:.1f} @ {d.station}：{ex}")
+            if len(seen) == 2:
+                break
+    L.append("")
+
+
 def write_report(
     out: Path, runs: list[Run], per_run: list[dict[str, Any]], summary: dict[str, Any]
 ) -> None:
@@ -535,6 +601,8 @@ def write_report(
         "差异来自采样随机性。"
     )
     L.append("")
+    _behavior(L, conds, summary)
+    _reasoning(L, conds, summary, showcase)
     sections = [
         (
             "一局的世界线",
