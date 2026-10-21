@@ -299,10 +299,13 @@ def test_report_renders(runs_dir: Path, tmp_path: Path) -> None:
         assert (tmp_path / fig).stat().st_size > 10_000
 
 
-def test_ghost_figure_pairs_two_runs_on_the_same_shock(runs_dir: Path, tmp_path: Path) -> None:
+def test_ghost_figure_stacks_runs_on_the_same_shock(runs_dir: Path, tmp_path: Path) -> None:
     runs = {r.condition: r for r in load_runs(runs_dir)}
-    name = fig_ghosts(tmp_path, runs["greedy-light"], runs["greedy-ansible"])
+    pair = [runs["greedy-light"], runs["greedy-ansible"]]
+    name = fig_ghosts(tmp_path, pair)
     assert name == "fig_ghosts.png" and (tmp_path / name).stat().st_size > 50_000
+    whole = fig_ghosts(tmp_path, [*pair, runs["greedy-light"]], name="whole.png", window=None)
+    assert whole == "whole.png" and (tmp_path / whole).stat().st_size > 50_000
 
 
 @pytest.mark.unit

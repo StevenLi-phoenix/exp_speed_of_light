@@ -644,29 +644,44 @@ def fig_spacetime(out: Path, run: Run, name: str = "fig_spacetime.png") -> str:
     return name
 
 
-def fig_ghosts(out: Path, top: Run, bottom: Run, name: str = "fig_ghosts.png") -> str | None:
-    """同一个世界的两局上下对照，标同一次冲击（取上面那局响应最多的短缺）。"""
-    front = _front(top)
+def fig_ghosts(
+    out: Path,
+    runs: list[Run],
+    name: str = "fig_ghosts.png",
+    window: tuple[float, float] | None = (8.0, 30.0),
+) -> str | None:
+    """同一个世界的几局上下对照，标同一次冲击（取第一局响应最多的短缺）。
+    window = 显示冲击开始前、后各多少年；None 显示整局。"""
+    front = _front(runs[0])
     if front is None:
         return None
-    fig, axes = plt.subplots(2, 1, figsize=(12, 8.4), sharex=True)
-    for ax, run in zip(axes, (top, bottom), strict=True):
+    t0 = front["t_start"]
+    fig, axes = plt.subplots(
+        len(runs), 1, figsize=(12, 0.9 + 3.6 * len(runs)), sharex=True, squeeze=False
+    )
+    for ax, run in zip(axes[:, 0], runs, strict=True):
         _draw_spacetime(ax, run, front)
-        n = len(_responders(run, front))
-        ax.set_title(
+        resp = _responders(run, front)
+        on_time = sum(1 for t in resp if t.t_arr is not None and t.t_arr <= front["t_end"])
+        title = (
             f"{LABEL.get(run.condition, run.condition)} · 重复 {run.meta['replicate']}："
-            f"收到消息后运货赶去 {n} 程（加粗）",
-            loc="left",
-            fontsize=10,
+            f"收到消息后运货赶去 {len(resp)} 程（加粗）"
         )
-    axes[1].set_xlabel("银河年（坐标时 t）")
-    handles, labels = axes[0].get_legend_handles_labels()
-    axes[1].legend(
+        if resp:
+            title += f"，{on_time} 程在冲击结束前到达"
+        if math.isinf(run.c_info):
+            title += f"；消息瞬时到达各站（竖线都在 y{t0:.1f}）"
+        ax.set_title(title, loc="left", fontsize=10)
+        if window is not None:
+            ax.set_xlim(max(t0 - window[0], 0.0), min(t0 + window[1], run.meta["t_end"]))
+    axes[-1, 0].set_xlabel("银河年（坐标时 t）")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    axes[-1, 0].legend(
         handles, labels, ncol=7, fontsize=8.5, loc="upper left", bbox_to_anchor=(0, -0.16)
     )
     fig.suptitle(
-        f"同一个世界、同一场 {front['station']} {front['good']} 短缺（y{front['t_start']:.0f}–"
-        f"y{front['t_end']:.0f}，深灰带）：消息走到各站要 d/c 年，船再飞 d/β 年",
+        f"同一个世界、同一场 {front['station']} {front['good']} 短缺（y{t0:.0f}–"
+        f"y{front['t_end']:.0f}，深灰带）：光速下消息走到各站要 d/c 年，船再飞 d/β 年",
         x=0.01,
         ha="left",
         fontsize=11.5,
@@ -797,7 +812,16 @@ def write_report(
         ),
         None,
     )
-    figs["ghosts"] = fig_ghosts(out, greedy_pair, llm_light[0]) if greedy_pair else None
+    newton = [
+        r
+        for r in runs
+        if r.condition == "llm-newton"
+        and greedy_pair
+        and r.meta["world_seed"] == greedy_pair.meta["world_seed"]
+    ]
+    figs["ghosts"] = (
+        fig_ghosts(out, [greedy_pair, llm_light[0], *newton[:1]]) if greedy_pair else None
+    )
     conds = [c for c in ORDER if c in summary]
     L: list[str] = []
     L.append("# 相对论星际贸易：实验数据报告")
@@ -857,8 +881,9 @@ def write_report(
         (
             "追幽灵：同一场冲击，贪心 vs LLM",
             "ghosts",
-            "上下两局是同一个世界（冲击和噪声完全相同）。加粗的是收到短缺消息后载着短缺的货赶往冲击站的航程。"
-            "光速下，远方的冲击从发生到船赶到至少 d/c + d/β ≈ 2d 年，往往比冲击本身还长。",
+            "几局都是同一个世界（冲击和噪声完全相同），只截取冲击前后。加粗的是收到短缺消息后载着短缺的货"
+            "赶往冲击站的航程。光速下，远方的冲击从发生到船赶到至少 d/c + d/β ≈ 2d 年，往往比冲击本身还长；"
+            "有 LLM·牛顿局时放在最下面作对照（消息瞬时到达，船速没有上限）。",
         ),
         ("终局净值", "networth", "推理（LLM vs 贪心）和物理（光速 vs 瞬时 vs 牛顿）各自的效果。"),
         (
