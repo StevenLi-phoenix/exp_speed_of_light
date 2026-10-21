@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import math
+import random
 import re
 import statistics
 from collections import Counter, defaultdict
@@ -587,11 +589,92 @@ def summarize(per_run: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+# ---------------- 人工核对 ----------------
+
+AUDIT_FIELDS = ("concept", "run", "merchant", "t", "station", "sentences", "label")
+
+
+def dock_key(run_id: str, merchant: str, t: float) -> str:
+    return f"{run_id}|{merchant}|{t:.2f}"
+
+
+def audit_sample(
+    runs: list[Run], n: int, seed: int = 0, exclude: Iterable[str] = ()
+) -> list[dict[str, Any]]:
+    """每个概念随机抽 n 次命中的停靠（跳过 exclude 里的 dock_key），列出命中的句子（最多 3 句），
+    label 留空，由人标 TP（确实在谈这个概念）或 FP。"""
+    rng = random.Random(seed)
+    skip = set(exclude)
+    rows: list[dict[str, Any]] = []
+    for k in CONCEPTS:
+        pool = [
+            (r, d)
+            for r in runs
+            for d in r.docks
+            if dock_key(r.meta["run_id"], d.merchant, d.t) not in skip
+            and k in concepts(d.text, d.merchant, r.meta["final"])
+        ]
+        for r, d in rng.sample(pool, min(n, len(pool))):
+            hits = [x.strip() for x in _sentences(d.text) if _hit(k, x)]
+            if not hits:  # 只因提到对手的名字而命中
+                names = [m for m in r.meta["final"] if m != d.merchant]
+                hits = [
+                    x.strip()
+                    for x in _sentences(d.text)
+                    if any(re.search(rf"\b{re.escape(m)}\b", x) for m in names)
+                ]
+            rows.append(
+                {
+                    "concept": k,
+                    "run": r.meta["run_id"],
+                    "merchant": d.merchant,
+                    "t": f"{d.t:.2f}",
+                    "station": d.station,
+                    "sentences": " ‖ ".join(h[:300] for h in hits[:3]),
+                    "label": "",
+                }
+            )
+    return rows
+
+
+def write_audit(path: Path, rows: list[dict[str, Any]]) -> None:
+    if path.exists():
+        raise FileExistsError(f"{path} exists (may hold labels); remove it to resample")
+    with path.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=AUDIT_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def audit_precision(path: Path) -> dict[str, tuple[int, int]]:
+    """读人工标注过的核对表：概念 → (标为 TP 的数量, 已标注数量)；未标注的行不计。"""
+    out: dict[str, tuple[int, int]] = {}
+    with path.open(newline="") as f:
+        for row in csv.DictReader(f):
+            label = row["label"].strip().upper()
+            if label not in ("TP", "FP"):
+                continue
+            tp, n = out.get(row["concept"], (0, 0))
+            out[row["concept"]] = (tp + (label == "TP"), n + 1)
+    return out
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument("--runs", default="runs")
     p.add_argument("--out", required=True)
     p.add_argument("--world", type=int, default=None, help="only runs on this world seed")
+    p.add_argument(
+        "--audit",
+        type=int,
+        default=0,
+        metavar="N",
+        help="also write concept_audit.csv: N tagged docks per concept to label TP/FP by hand",
+    )
+    p.add_argument("--audit-seed", type=int, default=0)
+    p.add_argument(
+        "--audit-exclude", default=None, help="JSON list of dock keys already used for tuning"
+    )
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     runs = load_runs(Path(args.runs))
@@ -604,6 +687,11 @@ def main() -> None:
     (out / "metrics.json").write_text(
         json.dumps({"summary": summary, "runs": per_run}, indent=1, ensure_ascii=False)
     )
+    if args.audit:
+        exclude = json.loads(Path(args.audit_exclude).read_text()) if args.audit_exclude else []
+        rows = audit_sample(runs, args.audit, args.audit_seed, exclude)
+        write_audit(out / "concept_audit.csv", rows)
+        log.info("wrote %d audit rows → %s", len(rows), out / "concept_audit.csv")
     from reltrade.report import write_report  # matplotlib 只在出报告时加载
 
     write_report(out, runs, per_run, summary)

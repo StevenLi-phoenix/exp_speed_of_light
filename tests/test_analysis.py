@@ -9,6 +9,8 @@ import pytest
 from reltrade.analysis import (
     Dock,
     arrival_surprise,
+    audit_precision,
+    audit_sample,
     concepts,
     excerpt,
     load_docks,
@@ -16,6 +18,7 @@ from reltrade.analysis import (
     rebuild_markets,
     run_metrics,
     summarize,
+    write_audit,
 )
 from reltrade.experiment import run_one
 from reltrade.report import _plane, write_report
@@ -248,3 +251,58 @@ def test_star_layout_spreads_distortion() -> None:
 
     pca = worst(_plane(w, iters=0))  # 纯投影：Wolf 和 Lalande 几乎重合
     assert pca > 0.5 and worst(_plane(w)) < 0.35
+
+
+def test_audit_sample_lists_hit_sentences_and_respects_exclusions(
+    runs_dir: Path, tmp_path: Path
+) -> None:
+    base = next(r for r in load_runs(runs_dir) if r.condition == "greedy-light")
+    docks = [
+        Dock("Asel", 1.0, "Sol", "Buy ore. The Sirius quote is 8.6 years old."),
+        Dock("Bram", 2.0, "Sol", "Wolf data is stale. Chen went there."),
+        Dock("Chen", 3.0, "Sol", "Nothing here."),
+    ]
+    run = replace(base, meta={**base.meta, "condition": "llm-light"}, docks=docks)
+    rows = audit_sample([run], n=5, seed=1)
+    stale = [r for r in rows if r["concept"] == "stale"]
+    assert {r["merchant"] for r in stale} == {"Asel", "Bram"}
+    assert next(r for r in stale if r["merchant"] == "Asel")["sentences"] == (
+        "The Sirius quote is 8.6 years old."
+    )
+    rivals = [r for r in rows if r["concept"] == "rivals"]
+    assert [r["sentences"] for r in rivals] == ["Chen went there."]  # 只因名字命中
+    assert audit_sample([run], n=5, seed=1) == rows  # 同一种子可复现
+    key = f"{run.meta['run_id']}|Asel|1.00"
+    assert all(r["merchant"] != "Asel" for r in audit_sample([run], 5, 1, exclude=[key]))
+    path = tmp_path / "concept_audit.csv"
+    write_audit(path, rows)
+    with pytest.raises(FileExistsError):
+        write_audit(path, rows)  # 不覆盖可能已标注的文件
+
+
+def test_audit_precision_counts_labeled_rows(tmp_path: Path) -> None:
+    path = tmp_path / "a.csv"
+    path.write_text(
+        "concept,run,merchant,t,station,sentences,label\n"
+        "stale,r,A,1.00,Sol,x,TP\n"
+        "stale,r,B,2.00,Sol,x,fp\n"
+        "stale,r,C,3.00,Sol,x,\n"
+        "dilation,r,A,1.00,Sol,x,TP\n"
+    )
+    assert audit_precision(path) == {"stale": (1, 2), "dilation": (1, 1)}
+
+
+def test_report_adds_audit_column_when_labels_exist(runs_dir: Path, tmp_path: Path) -> None:
+    base = next(r for r in load_runs(runs_dir) if r.condition == "greedy-light")
+    fake = replace(
+        base,
+        meta={**base.meta, "condition": "llm-light"},
+        docks=[Dock("Asel", 1.0, "Sol", "The Sirius quote is 8.6 years old.")],
+    )
+    (tmp_path / "concept_audit.csv").write_text(
+        "concept,run,merchant,t,station,sentences,label\nstale,r,A,1.00,Sol,x,TP\n"
+    )
+    per_run = [run_metrics(r) for r in (base, fake)]
+    write_report(tmp_path, [base, fake], per_run, summarize(per_run))
+    text = (tmp_path / "report.md").read_text()
+    assert "人工核对：真 / 抽查" in text and "| 1 / 1 |" in text

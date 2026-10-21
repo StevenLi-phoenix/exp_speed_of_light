@@ -25,6 +25,7 @@ from reltrade.analysis import (  # noqa: E402
     LABEL,
     ORDER,
     Run,
+    audit_precision,
     concepts,
     excerpt,
 )
@@ -606,7 +607,11 @@ def _behavior(L: list[str], conds: list[str], summary: dict[str, Any]) -> None:
 
 
 def _reasoning(
-    L: list[str], conds: list[str], summary: dict[str, Any], showcase: Run | None
+    L: list[str],
+    conds: list[str],
+    summary: dict[str, Any],
+    showcase: Run | None,
+    audit: dict[str, tuple[int, int]] | None = None,
 ) -> None:
     llm_conds = [c for c in conds if summary[c]["concepts"]]
     if not llm_conds:
@@ -619,12 +624,23 @@ def _reasoning(
         "本应为 0，它们的实际值可以当作误报率的参照。"
     )
     L.append("")
-    L.append("| 概念 | " + " | ".join(LABEL[c] for c in llm_conds) + " |")
-    L.append("|---|" + "---|" * len(llm_conds))
+    extra = " 人工核对：真 / 抽查 |" if audit else ""
+    L.append("| 概念 | " + " | ".join(LABEL[c] for c in llm_conds) + " |" + extra)
+    L.append("|---|" + "---|" * len(llm_conds) + ("---|" if audit else ""))
     for k, label in CONCEPT_LABEL.items():
         cells = " | ".join(_fmt(summary[c]["concepts"][k], 0, True) for c in llm_conds)
+        if audit:
+            tp, n = audit.get(k, (0, 0))
+            cells += f" | {tp} / {n}" if n else " | –"
         L.append(f"| {label} | {cells} |")
     L.append("")
+    if audit:
+        L.append(
+            "「人工核对」：每个概念从全部 LLM 局里随机抽若干次命中的停靠，人读命中的句子判断是否真在谈"
+            "这个概念（明细见 concept_audit.csv）。这只衡量误报（精度），不衡量漏报：换个说法的提及"
+            "关键词抓不到。精度接近 100% 的概念，表中占比可以看作「提到」的下限。"
+        )
+        L.append("")
     if showcase is None or not showcase.docks:
         return
     L.append(f"原文摘录（{showcase.meta['run_id']}，每个概念取最早提到它的两位商人）：")
@@ -705,7 +721,9 @@ def write_report(
     )
     L.append("")
     _behavior(L, conds, summary)
-    _reasoning(L, conds, summary, showcase)
+    audit_path = out / "concept_audit.csv"
+    audit = audit_precision(audit_path) if audit_path.exists() else None
+    _reasoning(L, conds, summary, showcase, audit)
     sections = [
         (
             "一局的世界线",
